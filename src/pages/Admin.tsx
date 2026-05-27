@@ -6,16 +6,34 @@ import { typeFieldHintForProduct, valuePlaceholderForProduct } from '../lib/prod
 import { getSearchFormFields, validateSearchForm } from '../lib/multiValueSearchForms';
 import { AdminDigitapTestView, showStructuredAdminTestResponse } from '../lib/searchResultFields';
 import { isUiPreviewToken } from '../lib/devPreview';
+import ConfirmModal from '../components/ConfirmModal';
+import LoadingOverlay from '../components/LoadingOverlay';
+import ApproveUserModal, { type ApproveCatalogRow } from '../components/ApproveUserModal';
+import AddCreditsModal from '../components/AddCreditsModal';
+import { formatAuditAction, formatAuditDetail, formatIstDateTime, logOutcomeLabel } from '../lib/adminFormat';
+
+function deleteUserErrorMessage(res: Response, data: unknown): string {
+  const detail = formatFastApiDetail(data);
+  if (res.status === 404 && detail === 'Not Found') {
+    return 'Delete is not available on the API server yet. Deploy the latest api/ service to Render, then try again.';
+  }
+  if (res.status === 404 && detail === 'User not found') {
+    return 'This account is no longer in the database. Refresh the user list.';
+  }
+  return detail;
+}
 
 type UserRow = { id: number; email: string; role: string; status: string; credits: number; created_at: string };
 type LogRow = {
   id: number;
   user_id: number;
   search_type: string;
+  search_value?: string | null;
   search_value_hash: string;
   status: string;
   credits_used: number;
   product_slug?: string;
+  product_name?: string;
   created_at: string;
   email: string;
 };
@@ -31,7 +49,7 @@ type TxRow = {
 };
 type PlanRow = { id: number; name: string; price: number; credits: number };
 
-type AdminTab = 'users' | 'logs' | 'transactions' | 'plans' | 'apiaccess' | 'apitest' | 'audit';
+type AdminTab = 'users' | 'logs' | 'billing' | 'transactions' | 'plans' | 'apiaccess' | 'apitest' | 'audit';
 
 type EntitlementRow = {
   slug: string;
@@ -47,6 +65,7 @@ type AuditRow = {
   action: string;
   entity_type: string;
   entity_id: string | null;
+  entity_email?: string;
   payload: Record<string, unknown>;
   created_at: string;
 };
@@ -64,7 +83,19 @@ export default function Admin() {
   const [plans, setPlans] = useState<PlanRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [creditInputs, setCreditInputs] = useState<Record<number, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
+  const [approveTarget, setApproveTarget] = useState<UserRow | null>(null);
+  const [approveModalError, setApproveModalError] = useState<string | null>(null);
+  const [approvingUserId, setApprovingUserId] = useState<number | null>(null);
+  const [approveCatalog, setApproveCatalog] = useState<ApproveCatalogRow[]>([]);
+  const [creditsTarget, setCreditsTarget] = useState<UserRow | null>(null);
+  const [creditsModalError, setCreditsModalError] = useState<string | null>(null);
+  const [addingCreditsUserId, setAddingCreditsUserId] = useState<number | null>(null);
+  const [logFilterUserId, setLogFilterUserId] = useState<number | ''>('');
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [billingRates, setBillingRates] = useState<Record<string, string>>({});
   const [planEdits, setPlanEdits] = useState<Record<number, { name: string; price: string; credits: string }>>({});
   const [apiUserId, setApiUserId] = useState<number | ''>('');
   const [entRows, setEntRows] = useState<EntitlementRow[]>([]);
@@ -73,7 +104,7 @@ export default function Admin() {
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
 
-  const [testSlug, setTestSlug] = useState('unified_lookup');
+  const [testSlug, setTestSlug] = useState('');
   const [testType, setTestType] = useState('Auto');
   const [testValue, setTestValue] = useState('');
   const [testMultiValues, setTestMultiValues] = useState<Record<string, string>>({});
@@ -103,6 +134,53 @@ export default function Admin() {
 
   const pendingCount = useMemo(() => users.filter((u) => u.status === 'pending').length, [users]);
 
+  const billingRows = useMemo(() => {
+    const map = new Map<
+      string,
+      { slug: string; name: string; total: number; success: number; error: number }
+    >();
+    for (const row of logs) {
+      const slug = (row.product_slug || 'unknown').trim() || 'unknown';
+      const cur = map.get(slug) ?? {
+        slug,
+        name: row.product_name || slug,
+        total: 0,
+        success: 0,
+        error: 0,
+      };
+      cur.total += 1;
+      if (logOutcomeLabel(row.status) === 'Success') cur.success += 1;
+      else cur.error += 1;
+      map.set(slug, cur);
+    }
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [logs]);
+
+  const billingTotal = useMemo(() => {
+    return billingRows.reduce((sum, row) => {
+      const rate = Number(billingRates[row.slug] ?? '');
+      if (!Number.isFinite(rate) || rate < 0) return sum;
+      return sum + row.success * rate;
+    }, 0);
+  }, [billingRows, billingRates]);
+
+  const loadLogs = useCallback(async () => {
+    if (!token) return;
+    if (isUiPreviewToken(token)) {
+      setLogs([]);
+      setLogsLoading(false);
+      return;
+    }
+    setLogsLoading(true);
+    try {
+      const qs = logFilterUserId === '' ? '?limit=500' : `?limit=500&user_id=${logFilterUserId}`;
+      const res = await apiFetch(`/api/admin/logs${qs}`, { token });
+      if (res.ok) setLogs(await res.json());
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [token, logFilterUserId]);
+
   const load = useCallback(async () => {
     if (!token) return;
     if (isUiPreviewToken(token)) {
@@ -118,15 +196,13 @@ export default function Admin() {
     setLoading(true);
     setError(null);
     try {
-      const [uRes, lRes, tRes, pRes] = await Promise.all([
+      const [uRes, tRes, pRes] = await Promise.all([
         apiFetch('/api/admin/users', { token }),
-        apiFetch('/api/admin/logs', { token }),
         apiFetch('/api/admin/transactions', { token }),
         apiFetch('/api/admin/plans', { token }),
       ]);
       if (uRes.ok) setUsers(await uRes.json());
       else setError('Failed to load users');
-      if (lRes.ok) setLogs(await lRes.json());
       if (tRes.ok) setTx(await tRes.json());
       if (pRes.ok) {
         const list: PlanRow[] = await pRes.json();
@@ -147,6 +223,49 @@ export default function Admin() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadLogs();
+  }, [loadLogs]);
+
+  useEffect(() => {
+    if (!token || isUiPreviewToken(token)) return;
+    let cancelled = false;
+    void fetch(apiUrl('/api/catalog?phase=all'))
+      .then((r) => r.json())
+      .then(
+        (data: {
+          flat?: Array<{ slug: string; name: string; default_credits_burn?: number }>;
+          grouped?: Record<string, { slug: string; name: string; default_credits_burn?: number }[]>;
+        }) => {
+          if (cancelled) return;
+          const flat = Array.isArray(data.flat) ? data.flat : [];
+          const rows =
+            flat.length > 0
+              ? flat
+              : [
+                  ...(data.grouped?.phase1 || []),
+                  ...(data.grouped?.phase2 || []),
+                  ...(data.grouped?.demo || []),
+                ];
+          setApproveCatalog(
+            rows
+              .filter((r) => r.slug !== 'unified_lookup')
+              .map((r) => ({
+                slug: r.slug,
+                name: r.name,
+                default_credits_burn: Number(r.default_credits_burn ?? 1),
+              }))
+          );
+        }
+      )
+      .catch(() => {
+        if (!cancelled) setApproveCatalog([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const loadEntitlements = useCallback(async () => {
     if (!token || apiUserId === '') return;
@@ -225,16 +344,20 @@ export default function Admin() {
                   ...(data.grouped?.demo || []),
                   ...(data.grouped?.excluded || []),
                 ];
-          setCatalogPicklist(
-            rows.map((r) => ({
+          const list = rows
+            .filter((r) => r.slug !== 'unified_lookup')
+            .map((r) => ({
               slug: r.slug,
               name: r.name,
               allowed_search_types:
                 Array.isArray(r.allowed_search_types) && r.allowed_search_types.length
                   ? r.allowed_search_types
                   : SEARCH_TYPES,
-            }))
-          );
+            }));
+          setCatalogPicklist(list);
+          if (list.length > 0) {
+            setTestSlug((prev) => (prev && list.some((x) => x.slug === prev) ? prev : list[0]!.slug));
+          }
         }
       )
       .catch(() => {
@@ -313,20 +436,85 @@ export default function Admin() {
     }
   };
 
-  const addCredits = async (id: number) => {
-    if (!token || isUiPreviewToken(token)) return;
-    const raw = creditInputs[id];
-    const credits = Number(raw);
-    if (!Number.isFinite(credits) || credits <= 0) return;
-    const res = await apiFetch(`/api/admin/users/${id}/credits`, {
-      method: 'POST',
-      token,
-      body: JSON.stringify({ credits }),
-    });
-    if (res.ok) {
-      setCreditInputs((m) => ({ ...m, [id]: '' }));
+  const confirmApproveUser = async (payload: {
+    credits: number;
+    items: { api_slug: string; enabled: boolean; credits_per_hit: number | null }[];
+  }) => {
+    const u = approveTarget;
+    if (!u || !token || isUiPreviewToken(token)) return;
+    setApproveModalError(null);
+    setApprovingUserId(u.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${u.id}/approve`, {
+        method: 'POST',
+        token,
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setApproveModalError(formatFastApiDetail(data));
+        return;
+      }
+      setApproveTarget(null);
       await load();
-      if (user?.id === id) await refreshUser();
+      await loadLogs();
+    } catch {
+      setApproveModalError('Network error');
+    } finally {
+      setApprovingUserId(null);
+    }
+  };
+
+  const confirmAddCredits = async (credits: number) => {
+    const u = creditsTarget;
+    if (!u || !token || isUiPreviewToken(token)) return;
+    setCreditsModalError(null);
+    setAddingCreditsUserId(u.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${u.id}/credits`, {
+        method: 'POST',
+        token,
+        body: JSON.stringify({ credits }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCreditsModalError(formatFastApiDetail(data));
+        return;
+      }
+      setCreditsTarget(null);
+      await load();
+      if (user?.id === u.id) await refreshUser();
+    } catch {
+      setCreditsModalError('Network error');
+    } finally {
+      setAddingCreditsUserId(null);
+    }
+  };
+
+  const openApiAccess = (u: UserRow) => {
+    setApiUserId(u.id);
+    setTab('apiaccess');
+  };
+
+  const confirmDeleteUser = async () => {
+    const u = deleteTarget;
+    if (!u || !token || isUiPreviewToken(token)) return;
+    setDeleteModalError(null);
+    setDeletingUserId(u.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${u.id}/delete`, { method: 'POST', token });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDeleteModalError(deleteUserErrorMessage(res, data));
+        return;
+      }
+      if (apiUserId === u.id) setApiUserId('');
+      setDeleteTarget(null);
+      await load();
+    } catch {
+      setDeleteModalError('Network error. Check your connection and try again.');
+    } finally {
+      setDeletingUserId(null);
     }
   };
 
@@ -372,9 +560,19 @@ export default function Admin() {
     }
   };
 
+  const overlayBusy =
+    loading ||
+    logsLoading ||
+    entLoading ||
+    auditLoading ||
+    deletingUserId !== null ||
+    approvingUserId !== null ||
+    addingCreditsUserId !== null;
+
   const tabs: { id: AdminTab; label: string }[] = [
     { id: 'users', label: 'Users' },
     { id: 'logs', label: 'Search logs' },
+    { id: 'billing', label: 'Billing calculation' },
     { id: 'transactions', label: 'Purchases' },
     { id: 'plans', label: 'Plans' },
     { id: 'apiaccess', label: 'User APIs' },
@@ -383,7 +581,61 @@ export default function Admin() {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+    <>
+    <LoadingOverlay visible={overlayBusy} />
+    <ApproveUserModal
+      open={approveTarget !== null}
+      email={approveTarget?.email ?? ''}
+      catalog={approveCatalog}
+      loading={approvingUserId !== null}
+      error={approveModalError}
+      onCancel={() => {
+        if (approvingUserId !== null) return;
+        setApproveTarget(null);
+        setApproveModalError(null);
+      }}
+      onConfirm={(p) => void confirmApproveUser(p)}
+    />
+    <AddCreditsModal
+      open={creditsTarget !== null}
+      email={creditsTarget?.email ?? ''}
+      loading={addingCreditsUserId !== null}
+      error={creditsModalError}
+      onCancel={() => {
+        if (addingCreditsUserId !== null) return;
+        setCreditsTarget(null);
+        setCreditsModalError(null);
+      }}
+      onConfirm={(c) => void confirmAddCredits(c)}
+    />
+    <ConfirmModal
+      open={deleteTarget !== null}
+      title="Delete account?"
+      confirmLabel="Delete permanently"
+      cancelLabel="Keep account"
+      loading={deletingUserId !== null}
+      error={deleteModalError}
+      onCancel={() => {
+        if (deletingUserId !== null) return;
+        setDeleteTarget(null);
+        setDeleteModalError(null);
+      }}
+      onConfirm={() => void confirmDeleteUser()}
+    >
+      {deleteTarget && (
+        <>
+          <p>
+            You are about to delete <strong className="text-[var(--app-text)]">{deleteTarget.email}</strong>.
+          </p>
+          <ul className="mt-3 list-disc space-y-1 pl-5">
+            <li>Search history, purchases, and API entitlements are removed</li>
+            <li>Pending registration OTP data for this email is cleared</li>
+            <li>This cannot be undone</li>
+          </ul>
+        </>
+      )}
+    </ConfirmModal>
+    <div className="w-full min-w-0 max-w-full px-4 py-10 sm:px-6 lg:px-8">
       <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#00b4d8]/15 text-[#00b4d8]">
@@ -437,8 +689,6 @@ export default function Admin() {
         ))}
       </div>
 
-      {loading && <p className="mb-4 text-sm text-[var(--app-muted)]">Loading…</p>}
-
       {tab === 'users' && (
         <div className="space-y-4">
           <p className="text-sm text-[var(--app-muted)]">
@@ -475,7 +725,10 @@ export default function Admin() {
                         <>
                           <button
                             type="button"
-                            onClick={() => void setStatus(u.id, 'active')}
+                            onClick={() => {
+                              setApproveModalError(null);
+                              setApproveTarget(u);
+                            }}
                             className="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700"
                           >
                             Approve
@@ -489,15 +742,6 @@ export default function Admin() {
                           </button>
                         </>
                       )}
-                      {u.status === 'active' && (
-                        <button
-                          type="button"
-                          onClick={() => void setStatus(u.id, 'blocked')}
-                          className="rounded-lg bg-red-600/90 px-2 py-1 text-xs font-bold text-white hover:bg-red-700"
-                        >
-                          Block
-                        </button>
-                      )}
                       {u.status === 'blocked' && (
                         <button
                           type="button"
@@ -507,23 +751,51 @@ export default function Admin() {
                           Unblock
                         </button>
                       )}
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min={1}
-                          placeholder="+credits"
-                          value={creditInputs[u.id] ?? ''}
-                          onChange={(e) => setCreditInputs((m) => ({ ...m, [u.id]: e.target.value }))}
-                          className="w-24 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-xs text-[var(--app-text)]"
-                        />
+                      {u.status === 'active' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCreditsModalError(null);
+                              setCreditsTarget(u);
+                            }}
+                            className="rounded-lg border border-[var(--app-border)] px-2 py-1 text-xs font-semibold text-[var(--app-text)] hover:border-[#0668E1]/40"
+                          >
+                            Add credits
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openApiAccess(u)}
+                            className="rounded-lg border border-[#00b4d8]/40 px-2 py-1 text-xs font-semibold text-[#00b4d8] hover:bg-[#00b4d8]/10"
+                          >
+                            API access
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingUserId === u.id}
+                            onClick={() => {
+                              setDeleteModalError(null);
+                              setDeleteTarget(u);
+                            }}
+                            className="rounded-lg border border-red-500/40 px-2 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                          >
+                            Delete account
+                          </button>
+                        </>
+                      )}
+                      {u.status === 'blocked' && (
                         <button
                           type="button"
-                          onClick={() => void addCredits(u.id)}
-                          className="rounded-lg border border-[var(--app-border)] px-2 py-1 text-xs font-semibold text-[var(--app-text)] hover:border-[#0668E1]/40"
+                          disabled={deletingUserId === u.id}
+                          onClick={() => {
+                            setDeleteModalError(null);
+                            setDeleteTarget(u);
+                          }}
+                          className="rounded-lg border border-red-500/40 px-2 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                         >
-                          Add
+                          Delete account
                         </button>
-                      </div>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -535,33 +807,154 @@ export default function Admin() {
       )}
 
       {tab === 'logs' && (
-        <div className="overflow-x-auto rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)]">
-          <table className="w-full min-w-[720px] text-left text-sm">
-            <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
-              <tr>
-                <th className="px-4 py-3 font-semibold">When</th>
-                <th className="px-4 py-3 font-semibold">User</th>
-                <th className="px-4 py-3 font-semibold">Type</th>
-                <th className="px-4 py-3 font-semibold">Hash</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold">Credits</th>
-                <th className="px-4 py-3 font-semibold">Product</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((row) => (
-                <tr key={row.id} className="border-t border-[var(--app-border)] text-[var(--app-text-secondary)]">
-                  <td className="px-4 py-2 font-mono text-xs">{row.created_at}</td>
-                  <td className="px-4 py-2">{row.email}</td>
-                  <td className="px-4 py-2">{row.search_type}</td>
-                  <td className="max-w-[180px] truncate px-4 py-2 font-mono text-xs">{row.search_value_hash}</td>
-                  <td className="px-4 py-2">{row.status}</td>
-                  <td className="px-4 py-2">{row.credits_used}</td>
-                  <td className="max-w-[140px] truncate px-4 py-2 font-mono text-xs">{row.product_slug ?? '—'}</td>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-end gap-3 rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">Filter by user</label>
+              <select
+                value={logFilterUserId === '' ? '' : String(logFilterUserId)}
+                onChange={(e) => setLogFilterUserId(e.target.value === '' ? '' : Number(e.target.value))}
+                className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-text)]"
+              >
+                <option value="">All users</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadLogs()}
+              className="rounded-xl border border-[var(--app-border)] px-4 py-2 text-sm font-semibold text-[var(--app-text)] hover:bg-[var(--app-surface-muted)]"
+            >
+              Apply filter
+            </button>
+            <p className="text-xs text-[var(--app-muted)]">Times shown in IST · up to 500 rows</p>
+          </div>
+          <div className="overflow-x-auto rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)]">
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">When (IST)</th>
+                  <th className="px-4 py-3 font-semibold">User</th>
+                  <th className="px-4 py-3 font-semibold">Product</th>
+                  <th className="px-4 py-3 font-semibold">Input</th>
+                  <th className="px-4 py-3 font-semibold">Outcome</th>
+                  <th className="px-4 py-3 font-semibold">Credits charged</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {logs.map((row) => {
+                  const outcome = logOutcomeLabel(row.status);
+                  return (
+                    <tr key={row.id} className="border-t border-[var(--app-border)] text-[var(--app-text-secondary)]">
+                      <td className="whitespace-nowrap px-4 py-2 text-xs">{formatIstDateTime(row.created_at)}</td>
+                      <td className="px-4 py-2">{row.email}</td>
+                      <td className="px-4 py-2">
+                        <div className="font-medium text-[var(--app-text)]">{row.product_name ?? row.product_slug ?? '—'}</div>
+                        {row.product_slug && (
+                          <div className="font-mono text-xs text-[var(--app-muted)]">{row.product_slug}</div>
+                        )}
+                      </td>
+                      <td className="max-w-[220px] truncate px-4 py-2 font-mono text-xs" title={row.search_value || undefined}>
+                        {row.search_value?.trim() || '—'}
+                      </td>
+                      <td className="px-4 py-2">
+                        <span
+                          className={
+                            outcome === 'Success'
+                              ? 'rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-300'
+                              : 'rounded-md bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-300'
+                          }
+                        >
+                          {outcome}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 font-mono">{row.credits_used}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'billing' && (
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--app-muted)]">
+            Aggregated from the current search log dataset (respects the user filter on Search logs). Enter a per-success
+            amount for each API; line total = success count × amount.
+          </p>
+          <div className="overflow-x-auto rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)]">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">API</th>
+                  <th className="px-4 py-3 font-semibold">Total calls</th>
+                  <th className="px-4 py-3 font-semibold">Success</th>
+                  <th className="px-4 py-3 font-semibold">Error</th>
+                  <th className="px-4 py-3 font-semibold">Amount per success (₹)</th>
+                  <th className="px-4 py-3 font-semibold">Line total (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {billingRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-6 text-center text-[var(--app-muted)]">
+                      No search logs loaded. Open Search logs or refresh.
+                    </td>
+                  </tr>
+                ) : (
+                  billingRows.map((row) => {
+                    const rate = Number(billingRates[row.slug] ?? '');
+                    const lineTotal = Number.isFinite(rate) && rate >= 0 ? row.success * rate : null;
+                    return (
+                      <tr key={row.slug} className="border-t border-[var(--app-border)]">
+                        <td className="px-4 py-2">
+                          <div className="font-medium text-[var(--app-text)]">{row.name}</div>
+                          <div className="font-mono text-xs text-[var(--app-muted)]">{row.slug}</div>
+                        </td>
+                        <td className="px-4 py-2 font-mono">{row.total}</td>
+                        <td className="px-4 py-2 font-mono text-emerald-300">{row.success}</td>
+                        <td className="px-4 py-2 font-mono text-red-300">{row.error}</td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={billingRates[row.slug] ?? ''}
+                            onChange={(e) =>
+                              setBillingRates((m) => ({ ...m, [row.slug]: e.target.value }))
+                            }
+                            className="w-28 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[var(--app-text)]"
+                            placeholder="0"
+                          />
+                        </td>
+                        <td className="px-4 py-2 font-mono font-semibold text-[var(--app-text)]">
+                          {lineTotal != null ? lineTotal.toFixed(2) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+              {billingRows.length > 0 && (
+                <tfoot className="border-t border-[var(--app-border)] bg-[var(--app-bg-secondary)]">
+                  <tr>
+                    <td colSpan={5} className="px-4 py-3 text-right font-semibold text-[var(--app-text)]">
+                      Grand total
+                    </td>
+                    <td className="px-4 py-3 font-mono text-lg font-bold text-[#00b4d8]">
+                      ₹{billingTotal.toFixed(2)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
         </div>
       )}
 
@@ -580,7 +973,7 @@ export default function Admin() {
             <tbody>
               {tx.map((row) => (
                 <tr key={row.id} className="border-t border-[var(--app-border)] text-[var(--app-text-secondary)]">
-                  <td className="px-4 py-2 font-mono text-xs">{row.created_at}</td>
+                  <td className="px-4 py-2 text-xs">{formatIstDateTime(row.created_at)}</td>
                   <td className="px-4 py-2">{row.email}</td>
                   <td className="px-4 py-2">{row.plan_name}</td>
                   <td className="px-4 py-2">₹{row.amount}</td>
@@ -662,8 +1055,8 @@ export default function Admin() {
           <div className="rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-6">
             <h2 className="mb-2 font-display text-lg font-bold text-[var(--app-text)]">Per-user API access & burn</h2>
             <p className="mb-4 text-sm text-[var(--app-muted)]">
-              Only APIs with <strong className="text-[var(--app-text)]">Enabled</strong> can be called for that user (except{' '}
-              <code className="rounded bg-[var(--app-bg)] px-1">unified_lookup</code>). Empty credit override uses the catalog default burn.
+              Only APIs with <strong className="text-[var(--app-text)]">Enabled</strong> can be called for that user. Empty credit
+              override uses the catalog default burn.
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <div>
@@ -700,9 +1093,7 @@ export default function Admin() {
             </div>
             {entMessage && <p className="mt-3 text-sm text-[var(--app-muted)]">{entMessage}</p>}
           </div>
-          {entLoading ? (
-            <p className="text-sm text-[var(--app-muted)]">Loading…</p>
-          ) : entRows.length ? (
+          {entRows.length ? (
             <div className="max-h-[560px] overflow-auto rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)]">
               <table className="w-full min-w-[720px] text-left text-sm">
                 <thead className="sticky top-0 z-10 border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
@@ -779,7 +1170,7 @@ export default function Admin() {
                       className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-[var(--app-text)]"
                     >
                       {catalogPicklist.length === 0 ? (
-                        <option value="unified_lookup">unified_lookup (catalog not loaded)</option>
+                        <option value="">Select a product…</option>
                       ) : (
                         catalogPicklist.map((c) => (
                           <option key={c.slug} value={c.slug}>
@@ -885,30 +1276,32 @@ export default function Admin() {
               Refresh
             </button>
           </div>
-          {auditLoading ? (
-            <p className="p-4 text-sm text-[var(--app-muted)]">Loading…</p>
-          ) : (
+          {!auditLoading && (
             <table className="w-full min-w-[800px] text-left text-sm">
               <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
                 <tr>
-                  <th className="px-3 py-2 font-semibold">When</th>
-                  <th className="px-3 py-2 font-semibold">Admin</th>
+                  <th className="px-3 py-2 font-semibold">When (IST)</th>
                   <th className="px-3 py-2 font-semibold">Action</th>
-                  <th className="px-3 py-2 font-semibold">Entity</th>
-                  <th className="px-3 py-2 font-semibold">Payload</th>
+                  <th className="px-3 py-2 font-semibold">User</th>
+                  <th className="px-3 py-2 font-semibold">Change</th>
                 </tr>
               </thead>
               <tbody>
                 {auditRows.map((row) => (
                   <tr key={row.id} className="border-t border-[var(--app-border)] align-top text-[var(--app-text-secondary)]">
-                    <td className="px-3 py-2 font-mono text-xs">{row.created_at}</td>
-                    <td className="px-3 py-2">{row.admin_id ?? '—'}</td>
-                    <td className="px-3 py-2">{row.action}</td>
-                    <td className="px-3 py-2">
-                      {row.entity_type} {row.entity_id ? `#${row.entity_id}` : ''}
+                    <td className="whitespace-nowrap px-3 py-2 text-xs">{formatIstDateTime(row.created_at)}</td>
+                    <td className="px-3 py-2 text-[var(--app-text)]">
+                      {formatAuditAction(row.action, row.payload ?? {})}
                     </td>
-                    <td className="max-w-md px-3 py-2 font-mono text-xs break-all text-[var(--app-muted)]">
-                      {JSON.stringify(row.payload)}
+                    <td className="px-3 py-2">
+                      {row.entity_type === 'user'
+                        ? row.entity_email || (row.entity_id ? `User #${row.entity_id}` : '—')
+                        : row.entity_type === 'plan'
+                          ? `Plan #${row.entity_id ?? '—'}`
+                          : `${row.entity_type} ${row.entity_id ?? ''}`.trim()}
+                    </td>
+                    <td className="max-w-lg px-3 py-2 text-xs leading-relaxed text-[var(--app-muted)]">
+                      {formatAuditDetail(row.action, row.payload ?? {})}
                     </td>
                   </tr>
                 ))}
@@ -918,5 +1311,6 @@ export default function Admin() {
         </div>
       )}
     </div>
+    </>
   );
 }

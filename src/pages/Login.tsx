@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useAuth } from '../context/AuthContext';
 import { apiUrl } from '../lib/api';
-import ThemeToggle from '../components/ThemeToggle';
+import PasswordInput from '../components/PasswordInput';
+import LoadingOverlay from '../components/LoadingOverlay';
 
 const publicApp = (import.meta.env.VITE_PUBLIC_APP_URL as string | undefined)?.replace(/\/$/, '');
 
@@ -54,9 +55,7 @@ export default function Login() {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center bg-[var(--app-bg)] p-4">
-      <div className="absolute right-4 top-4">
-        <ThemeToggle />
-      </div>
+      <LoadingOverlay visible={loading} label="Signing in" />
       <div className="pointer-events-none absolute left-1/2 top-0 h-[500px] w-[1000px] -translate-x-1/2 opacity-25">
         <div className="absolute inset-0 rounded-full bg-gradient-to-b from-[#0668E1] to-transparent blur-[100px] mix-blend-screen" />
       </div>
@@ -94,13 +93,11 @@ export default function Login() {
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--app-muted)]">
               Password
             </label>
-            <input
-              type="password"
+            <PasswordInput
               autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3 text-[var(--app-text)] outline-none transition focus:border-[#0668E1]/50 focus:ring-4 focus:ring-[#0668E1]/15"
             />
           </div>
           {error && (

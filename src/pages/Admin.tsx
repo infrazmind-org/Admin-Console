@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Shield } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import AdminLayout, { type AdminTabId } from '../components/AdminLayout';
+import { AdminAlert, AdminCard, StatusBadge } from '../components/admin/AdminUi';
 import { apiFetch, apiUrl, formatFastApiDetail } from '../lib/api';
 import { typeFieldHintForProduct, valuePlaceholderForProduct } from '../lib/productSearchHints';
 import { getSearchFormFields, validateSearchForm } from '../lib/multiValueSearchForms';
@@ -11,6 +12,12 @@ import LoadingOverlay from '../components/LoadingOverlay';
 import ApproveUserModal, { type ApproveCatalogRow } from '../components/ApproveUserModal';
 import AddCreditsModal from '../components/AddCreditsModal';
 import { formatAuditAction, formatAuditDetail, formatIstDateTime, logOutcomeLabel } from '../lib/adminFormat';
+import {
+  formatIstRangeLabel,
+  istMonthStartYmd,
+  istTodayYmd,
+  istYmdDaysAgo,
+} from '../lib/istDates';
 
 function deleteUserErrorMessage(res: Response, data: unknown): string {
   const detail = formatFastApiDetail(data);
@@ -49,7 +56,7 @@ type TxRow = {
 };
 type PlanRow = { id: number; name: string; price: number; credits: number };
 
-type AdminTab = 'users' | 'logs' | 'billing' | 'transactions' | 'plans' | 'apiaccess' | 'apitest' | 'audit';
+type AdminTab = AdminTabId;
 
 type EntitlementRow = {
   slug: string;
@@ -95,6 +102,10 @@ export default function Admin() {
   const [addingCreditsUserId, setAddingCreditsUserId] = useState<number | null>(null);
   const [logFilterUserId, setLogFilterUserId] = useState<number | ''>('');
   const [logsLoading, setLogsLoading] = useState(false);
+  const [billingFrom, setBillingFrom] = useState(() => istYmdDaysAgo(30));
+  const [billingTo, setBillingTo] = useState(() => istTodayYmd());
+  const [billingLogs, setBillingLogs] = useState<LogRow[]>([]);
+  const [billingLogsLoading, setBillingLogsLoading] = useState(false);
   const [billingRates, setBillingRates] = useState<Record<string, string>>({});
   const [planEdits, setPlanEdits] = useState<Record<number, { name: string; price: string; credits: string }>>({});
   const [apiUserId, setApiUserId] = useState<number | ''>('');
@@ -139,7 +150,7 @@ export default function Admin() {
       string,
       { slug: string; name: string; total: number; success: number; error: number }
     >();
-    for (const row of logs) {
+    for (const row of billingLogs) {
       const slug = (row.product_slug || 'unknown').trim() || 'unknown';
       const cur = map.get(slug) ?? {
         slug,
@@ -154,7 +165,7 @@ export default function Admin() {
       map.set(slug, cur);
     }
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [logs]);
+  }, [billingLogs]);
 
   const billingTotal = useMemo(() => {
     return billingRows.reduce((sum, row) => {
@@ -180,6 +191,30 @@ export default function Admin() {
       setLogsLoading(false);
     }
   }, [token, logFilterUserId]);
+
+  const loadBillingLogs = useCallback(async () => {
+    if (!token) return;
+    if (isUiPreviewToken(token)) {
+      setBillingLogs([]);
+      setBillingLogsLoading(false);
+      return;
+    }
+    if (billingFrom && billingTo && billingFrom > billingTo) {
+      setError('Billing date range: start date must be on or before end date.');
+      return;
+    }
+    setBillingLogsLoading(true);
+    try {
+      const qs = new URLSearchParams({ limit: '2000' });
+      if (billingFrom) qs.set('from', billingFrom);
+      if (billingTo) qs.set('to', billingTo);
+      if (logFilterUserId !== '') qs.set('user_id', String(logFilterUserId));
+      const res = await apiFetch(`/api/admin/logs?${qs}`, { token });
+      if (res.ok) setBillingLogs(await res.json());
+    } finally {
+      setBillingLogsLoading(false);
+    }
+  }, [token, billingFrom, billingTo, logFilterUserId]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -227,6 +262,10 @@ export default function Admin() {
   useEffect(() => {
     void loadLogs();
   }, [loadLogs]);
+
+  useEffect(() => {
+    if (tab === 'billing') void loadBillingLogs();
+  }, [tab, loadBillingLogs]);
 
   useEffect(() => {
     if (!token || isUiPreviewToken(token)) return;
@@ -569,17 +608,6 @@ export default function Admin() {
     approvingUserId !== null ||
     addingCreditsUserId !== null;
 
-  const tabs: { id: AdminTab; label: string }[] = [
-    { id: 'users', label: 'Users' },
-    { id: 'logs', label: 'Search logs' },
-    { id: 'billing', label: 'Billing calculation' },
-    { id: 'transactions', label: 'Purchases' },
-    { id: 'plans', label: 'Plans' },
-    { id: 'apiaccess', label: 'User APIs' },
-    { id: 'apitest', label: 'API test (no credits)' },
-    { id: 'audit', label: 'Audit log' },
-  ];
-
   return (
     <>
     <LoadingOverlay visible={overlayBusy} />
@@ -635,59 +663,28 @@ export default function Admin() {
         </>
       )}
     </ConfirmModal>
-    <div className="w-full min-w-0 max-w-full px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#00b4d8]/15 text-[#00b4d8]">
-            <Shield className="h-6 w-6" />
-          </div>
-          <div>
-            <h1 className="font-display text-3xl font-bold tracking-tight text-[var(--app-text)]">Admin console</h1>
-            <p className="text-[var(--app-muted)]">Approvals, credits, plans, and metadata-only visibility.</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded-xl border border-[var(--app-border)] px-4 py-2 text-sm font-semibold text-[var(--app-text)] hover:bg-[var(--app-surface-muted)]"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
+    <AdminLayout
+      activeTab={tab}
+      onTabChange={setTab}
+      pendingCount={pendingCount}
+      onRefresh={() => void load()}
+    >
       {isUiPreviewToken(token) && (
-        <div className="mb-6 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
+        <div className="mb-6">
+        <AdminAlert variant="warn">
           <strong className="font-semibold">Local UI preview</strong> — no backend; data actions are disabled and tables are empty.
           After <strong>Sign out</strong>, reload the page to return here. For a real session, remove{' '}
           <code className="rounded bg-[var(--app-bg)] px-1">VITE_ADMIN_UI_PREVIEW</code> from <code className="rounded bg-[var(--app-bg)] px-1">.env.local</code>, restart{' '}
           <code className="rounded bg-[var(--app-bg)] px-1">npm run dev</code>, and run the API.
+        </AdminAlert>
         </div>
       )}
 
       {error && (
-        <div className="mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">
-          {error}
+        <div className="mb-6">
+          <AdminAlert variant="error">{error}</AdminAlert>
         </div>
       )}
-
-      <div className="mb-8 flex flex-wrap gap-2 border-b border-[var(--app-border)] pb-2">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
-              tab === t.id
-                ? 'bg-[#00b4d8] text-white shadow-md'
-                : 'text-[var(--app-muted)] hover:bg-[var(--app-surface-muted)] hover:text-[var(--app-text)]'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
 
       {tab === 'users' && (
         <div className="space-y-4">
@@ -717,7 +714,9 @@ export default function Admin() {
                 <tr key={u.id} className="border-t border-[var(--app-border)] text-[var(--app-text-secondary)]">
                   <td className="px-4 py-3 font-medium text-[var(--app-text)]">{u.email}</td>
                   <td className="px-4 py-3">{u.role}</td>
-                  <td className="px-4 py-3">{u.status}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={u.status} />
+                  </td>
                   <td className="px-4 py-3 font-mono">{u.credits}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center">
@@ -885,9 +884,84 @@ export default function Admin() {
       {tab === 'billing' && (
         <div className="space-y-4">
           <p className="text-sm text-[var(--app-muted)]">
-            Aggregated from the current search log dataset (respects the user filter on Search logs). Enter a per-success
-            amount for each API; line total = success count × amount.
+            Call counts are loaded for the selected date range (IST). Optionally filter by user (same control as Search
+            logs). Enter a per-success amount for each API; line total = success count × amount.
           </p>
+          <div className="flex flex-wrap items-end gap-3 rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">From (IST)</label>
+              <input
+                type="date"
+                value={billingFrom}
+                onChange={(e) => setBillingFrom(e.target.value)}
+                className="admin-input max-w-[11rem]"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">To (IST)</label>
+              <input
+                type="date"
+                value={billingTo}
+                onChange={(e) => setBillingTo(e.target.value)}
+                className="admin-input max-w-[11rem]"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  { label: '7 days', from: istYmdDaysAgo(6), to: istTodayYmd() },
+                  { label: '10 days', from: istYmdDaysAgo(9), to: istTodayYmd() },
+                  { label: '30 days', from: istYmdDaysAgo(29), to: istTodayYmd() },
+                  { label: 'This month', from: istMonthStartYmd(), to: istTodayYmd() },
+                ] as const
+              ).map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => {
+                    setBillingFrom(preset.from);
+                    setBillingTo(preset.to);
+                  }}
+                  className="rounded-xl border border-[var(--app-border)] px-3 py-2 text-xs font-semibold text-[var(--app-text-secondary)] transition hover:border-[#0668E1]/40 hover:text-[var(--app-text)]"
+                >
+                  {preset.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setBillingFrom('');
+                  setBillingTo('');
+                }}
+                className="rounded-xl border border-[var(--app-border)] px-3 py-2 text-xs font-semibold text-[var(--app-text-secondary)] transition hover:border-[#0668E1]/40 hover:text-[var(--app-text)]"
+              >
+                All time
+              </button>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">User</label>
+              <select
+                value={logFilterUserId === '' ? '' : String(logFilterUserId)}
+                onChange={(e) => setLogFilterUserId(e.target.value === '' ? '' : Number(e.target.value))}
+                className="admin-input min-w-[12rem]"
+              >
+                <option value="">All users</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button type="button" onClick={() => void loadBillingLogs()} className="admin-btn-primary">
+              Apply range
+            </button>
+            <p className="w-full text-xs text-[var(--app-muted)]">
+              {billingLogsLoading
+                ? 'Loading…'
+                : `${formatIstRangeLabel(billingFrom, billingTo)} · ${billingLogs.length} log row(s) loaded`}
+            </p>
+          </div>
           <div className="overflow-x-auto rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)]">
             <table className="w-full min-w-[720px] text-left text-sm">
               <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
@@ -904,7 +978,9 @@ export default function Admin() {
                 {billingRows.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-6 text-center text-[var(--app-muted)]">
-                      No search logs loaded. Open Search logs or refresh.
+                      {billingLogsLoading
+                        ? 'Loading billing data…'
+                        : 'No API calls in this range. Adjust dates and click Apply range.'}
                     </td>
                   </tr>
                 ) : (
@@ -918,8 +994,8 @@ export default function Admin() {
                           <div className="font-mono text-xs text-[var(--app-muted)]">{row.slug}</div>
                         </td>
                         <td className="px-4 py-2 font-mono">{row.total}</td>
-                        <td className="px-4 py-2 font-mono text-emerald-300">{row.success}</td>
-                        <td className="px-4 py-2 font-mono text-red-300">{row.error}</td>
+                        <td className="px-4 py-2 font-mono text-emerald-600 dark:text-emerald-300">{row.success}</td>
+                        <td className="px-4 py-2 font-mono text-red-600 dark:text-red-300">{row.error}</td>
                         <td className="px-4 py-2">
                           <input
                             type="number"
@@ -1150,17 +1226,14 @@ export default function Admin() {
 
       {tab === 'apitest' && (
         <div className="space-y-6">
-          <div className="rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-6">
-            <h2 className="mb-2 font-display text-lg font-bold text-[var(--app-text)]">Digitap probe (admin)</h2>
-            <p className="mb-4 text-sm text-[var(--app-muted)]">
-              Same request shaping as customer search routes, but <strong className="text-[var(--app-text)]">no credits</strong> are debited
-              and nothing is written to <code className="rounded bg-[var(--app-bg)] px-1">search_logs</code>. Use for connectivity checks only;
-              still subject to vendor IP allowlists and rate limits.
-            </p>
+          <AdminCard
+            title="Digitap probe (admin)"
+            description="Same request shaping as customer search routes, but no credits are debited and nothing is written to search_logs. Use for connectivity checks only."
+          >
             {isUiPreviewToken(token) ? (
               <p className="text-sm text-[var(--app-muted)]">Disabled in local UI preview mode.</p>
             ) : (
-              <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,18rem)_1fr] lg:items-start">
+              <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(0,20rem)_1fr] xl:items-start">
                 <div className="min-w-0 space-y-4">
                   <div>
                     <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">Product</label>
@@ -1238,7 +1311,7 @@ export default function Admin() {
                     type="button"
                     disabled={testLoading || (!testFormFields && !testValue.trim())}
                     onClick={() => void runAdminDigitapTest()}
-                    className="rounded-xl bg-[#00b4d8] px-6 py-2.5 text-sm font-bold text-white hover:bg-[#0096b8] disabled:opacity-40"
+                    className="admin-btn-primary w-full"
                   >
                     {testLoading ? 'Calling…' : 'Run test'}
                   </button>
@@ -1249,18 +1322,24 @@ export default function Admin() {
                 <div className="min-w-0">
                   <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">Response</label>
                   {testResult != null && showStructuredAdminTestResponse(testResult) ? (
-                    <div className="max-h-[520px] w-full min-w-0 overflow-y-auto overflow-x-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4">
-                      <AdminDigitapTestView data={testResult} />
+                    <div className="max-h-[min(70vh,720px)] w-full min-w-0 overflow-y-auto overflow-x-auto rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)]/60 p-4 sm:p-5">
+                      <AdminDigitapTestView data={testResult as Record<string, unknown>} />
                     </div>
                   ) : (
-                    <pre className="max-h-[480px] w-full min-w-0 overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 font-mono text-xs text-[var(--app-text-secondary)]">
-                      {testResult != null ? JSON.stringify(testResult, null, 2) : 'Run a test to see results here.'}
-                    </pre>
+                    <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-[var(--app-border)] bg-[var(--app-surface-muted)]/40 p-8 text-center text-sm text-[var(--app-muted)]">
+                      {testResult != null ? (
+                        <pre className="max-h-[480px] w-full overflow-auto text-left font-mono text-xs text-[var(--app-text-secondary)]">
+                          {JSON.stringify(testResult, null, 2)}
+                        </pre>
+                      ) : (
+                        'Run a test to see structured results here.'
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
             )}
-          </div>
+          </AdminCard>
         </div>
       )}
 
@@ -1310,7 +1389,7 @@ export default function Admin() {
           )}
         </div>
       )}
-    </div>
+    </AdminLayout>
     </>
   );
 }

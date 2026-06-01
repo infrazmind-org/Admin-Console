@@ -1,35 +1,8 @@
 import React, { useMemo, useState } from 'react';
+import { AdminResultView, envelopeChips, extractBusinessPayload } from './adminResultView';
+import { resultFieldLabel } from './resultFieldLabels';
 
-/** Human labels for API / Digitap normalized keys (extend as products grow). */
-const KEY_LABELS: Record<string, string> = {
-  searchType: 'Input type',
-  searchValue: 'Input value',
-  productSlug: 'Product',
-  status: 'Status',
-  apiSource: 'API source',
-  message: 'Message',
-  result_code: 'Result code',
-  result: 'Response payload',
-  providerRef: 'Provider reference',
-  transaction_id: 'Transaction ID',
-  url: 'Session / consent URL',
-  expires_on: 'Expires (ITR)',
-  expires: 'Expires (Ecom)',
-  detail: 'Error detail',
-  creditsRemaining: 'Credits remaining',
-  http_response_code: 'HTTP code',
-  request_id: 'Request ID',
-  client_ref_num: 'Client reference',
-};
-
-export function resultFieldLabel(key: string): string {
-  if (KEY_LABELS[key]) return KEY_LABELS[key];
-  return key
-    .replace(/_/g, ' ')
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, (s) => s.toUpperCase())
-    .trim();
-}
+export { resultFieldLabel } from './resultFieldLabels';
 
 const KEY_ORDER = [
   'status',
@@ -174,12 +147,24 @@ function ValueBlock({ value, depth = 0 }: { value: unknown; depth?: number }) {
   return <span>{String(value)}</span>;
 }
 
+function formatJsonBlock(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 /** True when the admin Digitap test API returned its standard envelope (or raw vendor JSON). */
 export function showStructuredAdminTestResponse(data: unknown): data is Record<string, unknown> {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return false;
   const o = data as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(o, 'normalized')) return true;
+  if (Object.prototype.hasOwnProperty.call(o, 'rawUpstream')) return true;
   if (Object.prototype.hasOwnProperty.call(o, 'rawUpstreamPreview')) return true;
+  if (Object.prototype.hasOwnProperty.call(o, 'digitapResponse')) return true;
+  if (Object.prototype.hasOwnProperty.call(o, 'digitapRequest')) return true;
+  if (Object.prototype.hasOwnProperty.call(o, 'upstreamFailed')) return true;
   if (Object.prototype.hasOwnProperty.call(o, 'productSlug')) return true;
   if (Object.prototype.hasOwnProperty.call(o, 'result')) {
     return (
@@ -218,19 +203,45 @@ export function SearchResultKeyValue({ data }: { data: Record<string, unknown> }
 }
 
 export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }) {
-  const [showRaw, setShowRaw] = useState(false);
+  const upstreamFailed = data.upstreamFailed === true;
   const norm = data.normalized;
-  const raw = data.rawUpstreamPreview;
+  const rawObj = data.rawUpstream;
+  const rawPreview = data.rawUpstreamPreview;
+  const digitapOnly = data.digitapResponse;
+  const digitapRequest =
+    data.digitapRequest != null && typeof data.digitapRequest === 'object'
+      ? (data.digitapRequest as Record<string, unknown>)
+      : data.requestEcho != null && typeof data.requestEcho === 'object'
+        ? (data.requestEcho as Record<string, unknown>)
+        : null;
+  const httpStatus = data.httpStatus;
+
+  const [showRaw, setShowRaw] = useState(upstreamFailed);
+  const [showRequest, setShowRequest] = useState(!upstreamFailed);
 
   const parsedVendor = useMemo((): Record<string, unknown> | null => {
-    if (typeof raw !== 'string' || !raw.trim()) return null;
+    if (rawObj && typeof rawObj === 'object' && !Array.isArray(rawObj)) {
+      return rawObj as Record<string, unknown>;
+    }
+    if (typeof rawPreview !== 'string' || !rawPreview.trim()) return null;
     try {
-      const p = JSON.parse(raw) as unknown;
+      const p = JSON.parse(rawPreview) as unknown;
       return p && typeof p === 'object' && !Array.isArray(p) ? (p as Record<string, unknown>) : null;
     } catch {
       return null;
     }
-  }, [raw]);
+  }, [rawObj, rawPreview]);
+
+  const digitapFailureJson = useMemo(() => {
+    if (digitapOnly != null) return digitapOnly;
+    if (parsedVendor?.digitap_response != null) return parsedVendor.digitap_response;
+    if (upstreamFailed && parsedVendor) {
+      const { status: _s, http_status: _h, detail: _d, transport_error: _t, digitap_response: _dr, ...rest } =
+        parsedVendor;
+      if (Object.keys(rest).length > 0) return rest;
+    }
+    return upstreamFailed ? parsedVendor : null;
+  }, [digitapOnly, parsedVendor, upstreamFailed]);
 
   /** Prefer API `normalized`; merge in `result` from raw JSON if normalized was flattened; else show parsed vendor body. */
   const displayBody = useMemo((): Record<string, unknown> | null => {
@@ -263,11 +274,94 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
   const hasRequestMeta =
     data.productSlug != null || data.searchType != null || data.searchValue != null || data.creditsCharged != null;
 
+  const rawForDisplay =
+    rawObj != null
+      ? formatJsonBlock(rawObj)
+      : typeof rawPreview === 'string'
+        ? rawPreview
+        : '';
+
   return (
     <div className="w-full min-w-0 max-w-full space-y-4">
+      {upstreamFailed ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-red-400">Digitap call failed</h3>
+            {httpStatus != null ? (
+              <p className="mt-1 text-xs text-red-300/90">
+                HTTP status: <span className="font-mono">{String(httpStatus)}</span>
+              </p>
+            ) : null}
+            {typeof data.detail === 'string' && data.detail ? (
+              <p className="mt-1 text-xs text-red-300/90">{data.detail}</p>
+            ) : null}
+          </div>
+          {digitapRequest ? (
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-300/80">
+                Outbound request (what we sent)
+              </p>
+              {typeof digitapRequest.productName === 'string' || typeof digitapRequest.productSlug === 'string' ? (
+                <p className="mb-2 text-xs text-red-200/90">
+                  Product:{' '}
+                  <span className="font-mono">
+                    {String(digitapRequest.productName ?? digitapRequest.productSlug)}
+                  </span>
+                  {typeof digitapRequest.productSlug === 'string' &&
+                  digitapRequest.productName &&
+                  digitapRequest.productSlug !== digitapRequest.productName ? (
+                    <span className="text-red-300/70"> ({String(digitapRequest.productSlug)})</span>
+                  ) : null}
+                </p>
+              ) : null}
+              {typeof digitapRequest.url === 'string' && digitapRequest.url ? (
+                <p className="mb-2 break-all text-xs text-red-200/90">
+                  <span className="font-semibold">{String(digitapRequest.method ?? 'POST')}</span>{' '}
+                  <span className="font-mono">{digitapRequest.url}</span>
+                </p>
+              ) : typeof digitapRequest.path === 'string' ? (
+                <p className="mb-2 break-all text-xs text-red-200/90">
+                  Path: <span className="font-mono">{digitapRequest.path}</span>
+                  {digitapRequest.baseUrl ? (
+                    <>
+                      {' '}
+                      (base <span className="font-mono">{String(digitapRequest.baseUrl)}</span>)
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
+              {typeof digitapRequest.catalogDigitapPath === 'string' ? (
+                <p className="mb-2 text-xs text-red-300/80">
+                  Catalog path: <span className="font-mono">{digitapRequest.catalogDigitapPath}</span>
+                </p>
+              ) : null}
+              <pre className="max-h-[280px] overflow-auto rounded-lg border border-red-500/30 bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+                {formatJsonBlock({
+                  method: digitapRequest.method ?? 'POST',
+                  url: digitapRequest.url,
+                  headers: digitapRequest.requestHeaders,
+                  body: digitapRequest.requestBody,
+                })}
+              </pre>
+            </div>
+          ) : null}
+          {digitapFailureJson != null ? (
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-300/80">
+                Digitap response JSON
+              </p>
+              <pre className="max-h-[360px] overflow-auto rounded-lg border border-red-500/30 bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+                {formatJsonBlock(digitapFailureJson)}
+              </pre>
+            </div>
+          ) : (
+            <p className="text-xs text-red-300/80">No JSON body from Digitap — see full upstream below.</p>
+          )}
+        </div>
+      ) : null}
       {hasRequestMeta ? (
-        <div className="min-w-0 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--app-muted)]">Request</h3>
+        <div className="glass-card min-w-0 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--app-muted)]">Test input</h3>
           <SearchResultKeyValue
             data={{
               productSlug: data.productSlug,
@@ -278,27 +372,63 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
           />
         </div>
       ) : null}
-      <div className="min-w-0 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
-        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--app-muted)]">Parsed response</h3>
-        {displayBody && Object.keys(displayBody).length > 0 ? (
-          <SearchResultKeyValue data={displayBody} />
-        ) : (
-          <p className="text-sm text-[var(--app-muted)]">Nothing to parse — open raw upstream below.</p>
-        )}
+
+      {displayBody && envelopeChips(displayBody).length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {envelopeChips(displayBody).map((chip) => (
+            <span
+              key={chip.label}
+              className="inline-flex flex-col rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-muted)] px-3 py-1.5"
+            >
+              <span className="text-[10px] font-bold uppercase tracking-wide text-[var(--app-muted)]">{chip.label}</span>
+              <span className="font-mono text-xs font-semibold text-[var(--app-text)]">{chip.value}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="glass-card min-w-0 p-4 sm:p-5">
+        <h3 className="mb-4 font-display text-sm font-bold text-[var(--app-text)]">Result data</h3>
+        {(() => {
+          const business = extractBusinessPayload(displayBody);
+          if (business) {
+            return <AdminResultView data={business} />;
+          }
+          if (displayBody && Object.keys(displayBody).length > 0) {
+            return <SearchResultKeyValue data={displayBody} />;
+          }
+          return <p className="text-sm text-[var(--app-muted)]">Nothing to parse — open raw upstream below.</p>;
+        })()}
       </div>
-      {(typeof raw === 'string' && raw.length > 0) || data.note ? (
+      {digitapRequest && !upstreamFailed ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowRequest((s) => !s)}
+            className="text-xs font-semibold text-[#0668E1] hover:underline"
+          >
+            {showRequest ? 'Hide' : 'Show'} outbound Digitap request
+          </button>
+          {showRequest ? (
+            <pre className="mt-2 max-h-[280px] overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+              {formatJsonBlock(digitapRequest)}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+      {(rawForDisplay.length > 0 || data.note) ? (
         <div>
           <button
             type="button"
             onClick={() => setShowRaw((s) => !s)}
-            className="text-xs font-semibold text-[#00b4d8] hover:underline"
+            className="text-xs font-semibold text-[#0668E1] hover:underline"
           >
-            {showRaw ? 'Hide' : 'Show'} raw upstream (debug)
+            {showRaw ? 'Hide' : 'Show'} full upstream envelope (debug)
           </button>
           {showRaw && (
-            <pre className="mt-2 max-h-[280px] overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+            <pre className="mt-2 max-h-[420px] overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
               {data.note ? `Note: ${String(data.note)}\n\n` : ''}
-              {typeof raw === 'string' ? raw : ''}
+              {rawForDisplay}
             </pre>
           )}
         </div>

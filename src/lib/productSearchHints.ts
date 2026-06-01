@@ -8,7 +8,7 @@ export function valuePlaceholderForProduct(slug: string): string {
     mobile_to_prefill: '10-digit Indian mobile',
     itr_consent_flow: 'PAN only (e.g. ABCDE1234F)',
     gst_advanced: '15-character GSTIN',
-    contact_to_gst: '15-character GSTIN',
+    contact_to_gst: '10-digit Indian mobile (contact number)',
     epfo_employment: 'Employee full name|Employer company name',
     arm_credit_suite: 'Name|Mobile|Email optional|PAN|DOB (yyyy-mm-dd)',
     ecomm_analytics_v2: 'website_id|username (see Digitap Ecomm doc)',

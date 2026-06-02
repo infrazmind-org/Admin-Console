@@ -17,13 +17,17 @@ export function logOutcomeLabel(status: string): 'Success' | 'Error' {
 }
 
 const API_ERROR_KIND_LABELS: Record<string, string> = {
-  http_error: 'Digitap HTTP error',
-  transport_error: 'Network / timeout',
+  digitap_http_error: 'Digitap HTTP error',
+  digitap_timeout: 'Digitap HTTP 504 (vendor timeout)',
+  digitap_upstream_error: 'Digitap upstream error',
+  no_digitap_http_response: 'No Digitap HTTP body',
   auth_error: 'Digitap auth failed',
-  upstream_error: 'Digitap upstream error',
   vendor_result_code: 'Digitap result code',
   vendor_message: 'Digitap error message',
   billing_failed: 'Billing failed (our system)',
+  http_error: 'Digitap HTTP error',
+  transport_error: 'No Digitap HTTP body (legacy)',
+  upstream_error: 'Digitap upstream error',
 };
 
 export function apiErrorSourceLabel(source: string): string {

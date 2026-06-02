@@ -951,8 +951,9 @@ export default function Admin() {
         <div className="space-y-4">
           <p className="text-sm text-[var(--app-muted)]">
             Failures from customer dashboard searches: <strong className="text-[var(--app-text)]">Vendor (Digitap)</strong>{' '}
-            covers HTTP errors, timeouts, and Digitap error codes; <strong className="text-[var(--app-text)]">System</strong>{' '}
-            covers billing/RPC failures on our side. Users still see a generic message; details are stored here for ops.
+            rows include the exact <code className="rounded bg-[var(--app-bg)] px-1">digitap_response</code> JSON when Digitap
+            returned HTTP (including 504). <strong className="text-[var(--app-text)]">System</strong> is billing/RPC on our
+            side only — not product timeouts.
           </p>
           <div className="flex flex-wrap items-end gap-3 rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
             <div>
@@ -1087,6 +1088,23 @@ export default function Admin() {
                         {expanded && (
                           <tr className="border-t border-[var(--app-border)] bg-[var(--app-bg)]">
                             <td colSpan={10} className="px-4 py-3">
+                              {row.detail_json &&
+                              typeof row.detail_json === 'object' &&
+                              'digitap_response' in row.detail_json ? (
+                                <>
+                                  <p className="mb-2 text-xs font-semibold uppercase text-[var(--app-muted)]">
+                                    Digitap response
+                                  </p>
+                                  <pre className="mb-3 max-h-64 overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-muted)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+                                    {JSON.stringify(
+                                      (row.detail_json as { digitap_response: unknown }).digitap_response,
+                                      null,
+                                      2
+                                    )}
+                                  </pre>
+                                </>
+                              ) : null}
+                              <p className="mb-2 text-xs font-semibold uppercase text-[var(--app-muted)]">Full detail</p>
                               <pre className="max-h-64 overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-muted)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
                                 {JSON.stringify(row.detail_json ?? {}, null, 2)}
                               </pre>

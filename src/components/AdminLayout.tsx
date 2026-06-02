@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Activity,
+  AlertTriangle,
   ClipboardList,
   CreditCard,
   FlaskConical,
@@ -14,6 +15,7 @@ import {
 export type AdminTabId =
   | 'users'
   | 'logs'
+  | 'apierrors'
   | 'billing'
   | 'transactions'
   | 'plans'
@@ -24,6 +26,7 @@ export type AdminTabId =
 const TAB_META: Record<AdminTabId, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
   users: { label: 'Users', icon: Users },
   logs: { label: 'Search logs', icon: Activity },
+  apierrors: { label: 'API errors', icon: AlertTriangle },
   billing: { label: 'Billing', icon: Receipt },
   transactions: { label: 'Purchases', icon: CreditCard },
   plans: { label: 'Plans', icon: LayoutGrid },

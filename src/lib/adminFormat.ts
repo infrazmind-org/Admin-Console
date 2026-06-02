@@ -16,6 +16,24 @@ export function logOutcomeLabel(status: string): 'Success' | 'Error' {
   return s === 'Success' ? 'Success' : 'Error';
 }
 
+const API_ERROR_KIND_LABELS: Record<string, string> = {
+  http_error: 'Digitap HTTP error',
+  transport_error: 'Network / timeout',
+  auth_error: 'Digitap auth failed',
+  upstream_error: 'Digitap upstream error',
+  vendor_result_code: 'Digitap result code',
+  vendor_message: 'Digitap error message',
+  billing_failed: 'Billing failed (our system)',
+};
+
+export function apiErrorSourceLabel(source: string): string {
+  return source === 'vendor' ? 'Vendor (Digitap)' : source === 'system' ? 'System (InfrazMind)' : source || '—';
+}
+
+export function apiErrorKindLabel(kind: string): string {
+  return API_ERROR_KIND_LABELS[kind] || kind.replace(/_/g, ' ');
+}
+
 type AuditPayload = Record<string, unknown>;
 
 export function formatAuditAction(action: string, payload: AuditPayload): string {

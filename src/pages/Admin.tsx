@@ -11,7 +11,14 @@ import ConfirmModal from '../components/ConfirmModal';
 import LoadingOverlay from '../components/LoadingOverlay';
 import ApproveUserModal, { type ApproveCatalogRow } from '../components/ApproveUserModal';
 import AddCreditsModal from '../components/AddCreditsModal';
-import { formatAuditAction, formatAuditDetail, formatIstDateTime, logOutcomeLabel } from '../lib/adminFormat';
+import {
+  apiErrorKindLabel,
+  apiErrorSourceLabel,
+  formatAuditAction,
+  formatAuditDetail,
+  formatIstDateTime,
+  logOutcomeLabel,
+} from '../lib/adminFormat';
 import {
   formatIstRangeLabel,
   istMonthStartYmd,
@@ -77,6 +84,24 @@ type AuditRow = {
   created_at: string;
 };
 
+type ApiErrorRow = {
+  id: number;
+  user_id: number;
+  email: string;
+  product_slug: string;
+  product_name?: string;
+  search_type: string;
+  search_value?: string | null;
+  error_source: string;
+  error_kind: string;
+  http_status?: number | null;
+  result_code?: string | null;
+  message?: string | null;
+  digitap_path?: string | null;
+  detail_json?: Record<string, unknown>;
+  created_at: string;
+};
+
 type CatalogPickRow = { slug: string; name: string; allowed_search_types: string[] };
 
 const SEARCH_TYPES = ['Auto', 'Aadhaar', 'PAN', 'Mobile', 'Email', 'Bank', 'Unknown'];
@@ -107,6 +132,12 @@ export default function Admin() {
   const [billingLogs, setBillingLogs] = useState<LogRow[]>([]);
   const [billingLogsLoading, setBillingLogsLoading] = useState(false);
   const [billingRates, setBillingRates] = useState<Record<string, string>>({});
+  const [apiErrors, setApiErrors] = useState<ApiErrorRow[]>([]);
+  const [apiErrorsLoading, setApiErrorsLoading] = useState(false);
+  const [apiErrorSourceFilter, setApiErrorSourceFilter] = useState<'' | 'vendor' | 'system'>('');
+  const [apiErrorFrom, setApiErrorFrom] = useState(() => istYmdDaysAgo(30));
+  const [apiErrorTo, setApiErrorTo] = useState(() => istTodayYmd());
+  const [expandedApiErrorId, setExpandedApiErrorId] = useState<number | null>(null);
   const [planEdits, setPlanEdits] = useState<Record<number, { name: string; price: string; credits: string }>>({});
   const [apiUserId, setApiUserId] = useState<number | ''>('');
   const [entRows, setEntRows] = useState<EntitlementRow[]>([]);
@@ -216,6 +247,31 @@ export default function Admin() {
     }
   }, [token, billingFrom, billingTo, logFilterUserId]);
 
+  const loadApiErrors = useCallback(async () => {
+    if (!token) return;
+    if (isUiPreviewToken(token)) {
+      setApiErrors([]);
+      setApiErrorsLoading(false);
+      return;
+    }
+    if (apiErrorFrom && apiErrorTo && apiErrorFrom > apiErrorTo) {
+      setError('API error date range: start date must be on or before end date.');
+      return;
+    }
+    setApiErrorsLoading(true);
+    try {
+      const qs = new URLSearchParams({ limit: '500' });
+      if (apiErrorFrom) qs.set('from', apiErrorFrom);
+      if (apiErrorTo) qs.set('to', apiErrorTo);
+      if (logFilterUserId !== '') qs.set('user_id', String(logFilterUserId));
+      if (apiErrorSourceFilter) qs.set('error_source', apiErrorSourceFilter);
+      const res = await apiFetch(`/api/admin/api-errors?${qs}`, { token });
+      if (res.ok) setApiErrors(await res.json());
+    } finally {
+      setApiErrorsLoading(false);
+    }
+  }, [token, apiErrorFrom, apiErrorTo, logFilterUserId, apiErrorSourceFilter]);
+
   const load = useCallback(async () => {
     if (!token) return;
     if (isUiPreviewToken(token)) {
@@ -266,6 +322,10 @@ export default function Admin() {
   useEffect(() => {
     if (tab === 'billing') void loadBillingLogs();
   }, [tab, loadBillingLogs]);
+
+  useEffect(() => {
+    if (tab === 'apierrors') void loadApiErrors();
+  }, [tab, loadApiErrors]);
 
   useEffect(() => {
     if (!token || isUiPreviewToken(token)) return;
@@ -602,6 +662,7 @@ export default function Admin() {
   const overlayBusy =
     loading ||
     logsLoading ||
+    apiErrorsLoading ||
     entLoading ||
     auditLoading ||
     deletingUserId !== null ||
@@ -667,7 +728,12 @@ export default function Admin() {
       activeTab={tab}
       onTabChange={setTab}
       pendingCount={pendingCount}
-      onRefresh={() => void load()}
+      onRefresh={() => {
+        void load();
+        if (tab === 'logs') void loadLogs();
+        if (tab === 'billing') void loadBillingLogs();
+        if (tab === 'apierrors') void loadApiErrors();
+      }}
     >
       {isUiPreviewToken(token) && (
         <div className="mb-6">
@@ -875,6 +941,162 @@ export default function Admin() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'apierrors' && (
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--app-muted)]">
+            Failures from customer dashboard searches: <strong className="text-[var(--app-text)]">Vendor (Digitap)</strong>{' '}
+            covers HTTP errors, timeouts, and Digitap error codes; <strong className="text-[var(--app-text)]">System</strong>{' '}
+            covers billing/RPC failures on our side. Users still see a generic message; details are stored here for ops.
+          </p>
+          <div className="flex flex-wrap items-end gap-3 rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">From (IST)</label>
+              <input
+                type="date"
+                value={apiErrorFrom}
+                onChange={(e) => setApiErrorFrom(e.target.value)}
+                className="admin-input max-w-[11rem]"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">To (IST)</label>
+              <input
+                type="date"
+                value={apiErrorTo}
+                onChange={(e) => setApiErrorTo(e.target.value)}
+                className="admin-input max-w-[11rem]"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">User</label>
+              <select
+                value={logFilterUserId === '' ? '' : String(logFilterUserId)}
+                onChange={(e) => setLogFilterUserId(e.target.value === '' ? '' : Number(e.target.value))}
+                className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-text)]"
+              >
+                <option value="">All users</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">Source</label>
+              <select
+                value={apiErrorSourceFilter}
+                onChange={(e) => setApiErrorSourceFilter(e.target.value as '' | 'vendor' | 'system')}
+                className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-text)]"
+              >
+                <option value="">All</option>
+                <option value="vendor">Vendor (Digitap)</option>
+                <option value="system">System</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadApiErrors()}
+              className="rounded-xl border border-[var(--app-border)] px-4 py-2 text-sm font-semibold text-[var(--app-text)] hover:bg-[var(--app-surface-muted)]"
+            >
+              Apply filters
+            </button>
+            <p className="text-xs text-[var(--app-muted)]">
+              {apiErrorsLoading
+                ? 'Loading…'
+                : `${formatIstRangeLabel(apiErrorFrom, apiErrorTo)} · ${apiErrors.length} row(s)`}
+            </p>
+          </div>
+          <div className="overflow-x-auto rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)]">
+            <table className="w-full min-w-[1100px] text-left text-sm">
+              <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">When (IST)</th>
+                  <th className="px-4 py-3 font-semibold">User</th>
+                  <th className="px-4 py-3 font-semibold">Product</th>
+                  <th className="px-4 py-3 font-semibold">Input</th>
+                  <th className="px-4 py-3 font-semibold">Source</th>
+                  <th className="px-4 py-3 font-semibold">Kind</th>
+                  <th className="px-4 py-3 font-semibold">HTTP</th>
+                  <th className="px-4 py-3 font-semibold">Code</th>
+                  <th className="px-4 py-3 font-semibold">Message</th>
+                  <th className="px-4 py-3 font-semibold">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {apiErrors.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-8 text-center text-[var(--app-muted)]">
+                      {apiErrorsLoading ? 'Loading API errors…' : 'No API errors in this range.'}
+                    </td>
+                  </tr>
+                ) : (
+                  apiErrors.map((row) => {
+                    const isVendor = row.error_source === 'vendor';
+                    const expanded = expandedApiErrorId === row.id;
+                    return (
+                      <React.Fragment key={row.id}>
+                        <tr className="border-t border-[var(--app-border)] text-[var(--app-text-secondary)]">
+                          <td className="whitespace-nowrap px-4 py-2 text-xs">{formatIstDateTime(row.created_at)}</td>
+                          <td className="px-4 py-2">{row.email}</td>
+                          <td className="px-4 py-2">
+                            <div className="font-medium text-[var(--app-text)]">{row.product_name ?? row.product_slug}</div>
+                            {row.digitap_path && (
+                              <div className="font-mono text-[10px] text-[var(--app-muted)]">{row.digitap_path}</div>
+                            )}
+                          </td>
+                          <td
+                            className="max-w-[160px] truncate px-4 py-2 font-mono text-xs"
+                            title={row.search_value || undefined}
+                          >
+                            {row.search_value?.trim() || '—'}
+                          </td>
+                          <td className="px-4 py-2">
+                            <span
+                              className={
+                                isVendor
+                                  ? 'rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-200'
+                                  : 'rounded-md bg-violet-500/15 px-2 py-0.5 text-xs font-semibold text-violet-300'
+                              }
+                            >
+                              {apiErrorSourceLabel(row.error_source)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-xs">{apiErrorKindLabel(row.error_kind)}</td>
+                          <td className="px-4 py-2 font-mono text-xs">{row.http_status ?? '—'}</td>
+                          <td className="px-4 py-2 font-mono text-xs">{row.result_code ?? '—'}</td>
+                          <td className="max-w-[200px] truncate px-4 py-2 text-xs" title={row.message || undefined}>
+                            {row.message?.trim() || '—'}
+                          </td>
+                          <td className="px-4 py-2">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedApiErrorId(expanded ? null : row.id)}
+                              className="text-xs font-semibold text-[#0668E1] hover:underline"
+                            >
+                              {expanded ? 'Hide' : 'View'}
+                            </button>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr className="border-t border-[var(--app-border)] bg-[var(--app-bg)]">
+                            <td colSpan={10} className="px-4 py-3">
+                              <pre className="max-h-64 overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-muted)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+                                {JSON.stringify(row.detail_json ?? {}, null, 2)}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

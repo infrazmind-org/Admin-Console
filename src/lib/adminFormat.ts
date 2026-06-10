@@ -11,9 +11,17 @@ export function formatIstDateTime(iso: string | null | undefined): string {
   }).format(d);
 }
 
-export function logOutcomeLabel(status: string): 'Success' | 'Error' {
+export function logOutcomeLabel(status: string): 'Success' | 'Not found' | 'Error' {
   const s = (status || '').trim();
-  return s === 'Success' ? 'Success' : 'Error';
+  if (s === 'Success') return 'Success';
+  if (s === 'Not found') return 'Not found';
+  return 'Error';
+}
+
+export function isBillableSearchLog(status: string, creditsUsed: number | string): boolean {
+  const used = typeof creditsUsed === 'string' ? Number(creditsUsed) : creditsUsed;
+  if (Number.isFinite(used) && used > 0) return true;
+  return logOutcomeLabel(status) === 'Success' || logOutcomeLabel(status) === 'Not found';
 }
 
 const API_ERROR_KIND_LABELS: Record<string, string> = {

@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { AdminFieldValue } from './adminFieldDisplay';
 import { AdminResultView, envelopeChips, extractBusinessPayload } from './adminResultView';
 import { resultFieldLabel } from './resultFieldLabels';
 
@@ -70,7 +71,7 @@ function ArrayOfObjectsTable({ rows }: { rows: Record<string, unknown>[] }) {
               <td className="whitespace-nowrap px-2 py-2 align-top text-[var(--app-muted)]">{i + 1}</td>
               {keys.map((k) => (
                 <td key={k} className="min-w-[8rem] max-w-md px-2 py-2 align-top break-words">
-                  <ValueBlock value={row[k]} depth={1} />
+                  <ValueBlock fieldKey={k} value={row[k]} depth={1} />
                 </td>
               ))}
             </tr>
@@ -98,7 +99,7 @@ function NestedFields({ data, depth }: { data: Record<string, unknown>; depth: n
               {resultFieldLabel(key)}
             </dt>
             <dd className="mt-1 min-w-0 max-w-full">
-              <ValueBlock value={data[key]} depth={depth + 1} />
+              <ValueBlock fieldKey={key} value={data[key]} depth={depth + 1} />
             </dd>
           </div>
         ))}
@@ -107,7 +108,7 @@ function NestedFields({ data, depth }: { data: Record<string, unknown>; depth: n
   );
 }
 
-function ValueBlock({ value, depth = 0 }: { value: unknown; depth?: number }) {
+function ValueBlock({ value, depth = 0, fieldKey }: { value: unknown; depth?: number; fieldKey?: string }) {
   if (value === null || value === undefined) {
     return <span className="text-[var(--app-muted)]">—</span>;
   }
@@ -117,6 +118,10 @@ function ValueBlock({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (typeof value === 'number' || typeof value === 'string') {
     const s = String(value);
     if (s === '') return <span className="text-[var(--app-muted)]">—</span>;
+    if (typeof value === 'string') {
+      const linked = <AdminFieldValue fieldKey={fieldKey} value={value} />;
+      if (linked) return linked;
+    }
     return (
       <span className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-[var(--app-text)]">
         {s}
@@ -194,7 +199,7 @@ export function SearchResultKeyValue({ data }: { data: Record<string, unknown> }
             {resultFieldLabel(key)}
           </dt>
           <dd className="mt-1 min-w-0 max-w-full">
-            <ValueBlock value={data[key]} />
+            <ValueBlock fieldKey={key} value={data[key]} />
           </dd>
         </div>
       ))}

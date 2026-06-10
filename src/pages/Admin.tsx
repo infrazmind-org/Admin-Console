@@ -17,8 +17,10 @@ import {
   formatAuditAction,
   formatAuditDetail,
   formatIstDateTime,
+  isBillableSearchLog,
   logOutcomeLabel,
 } from '../lib/adminFormat';
+import { formatCredits, parseCreditsInput } from '../lib/formatCredits';
 import {
   formatIstRangeLabel,
   istMonthStartYmd,
@@ -179,7 +181,7 @@ export default function Admin() {
   const billingRows = useMemo(() => {
     const map = new Map<
       string,
-      { slug: string; name: string; total: number; success: number; error: number }
+      { slug: string; name: string; total: number; billable: number; error: number }
     >();
     for (const row of billingLogs) {
       const slug = (row.product_slug || 'unknown').trim() || 'unknown';
@@ -187,11 +189,11 @@ export default function Admin() {
         slug,
         name: row.product_name || slug,
         total: 0,
-        success: 0,
+        billable: 0,
         error: 0,
       };
       cur.total += 1;
-      if (logOutcomeLabel(row.status) === 'Success') cur.success += 1;
+      if (isBillableSearchLog(row.status, row.credits_used)) cur.billable += 1;
       else cur.error += 1;
       map.set(slug, cur);
     }
@@ -202,7 +204,7 @@ export default function Admin() {
     return billingRows.reduce((sum, row) => {
       const rate = Number(billingRates[row.slug] ?? '');
       if (!Number.isFinite(rate) || rate < 0) return sum;
-      return sum + row.success * rate;
+      return sum + row.billable * rate;
     }, 0);
   }, [billingRows, billingRates]);
 
@@ -638,11 +640,12 @@ export default function Admin() {
     const items = entRows.map((r) => ({
       api_slug: r.slug,
       enabled: r.enabled_for_user,
-      credits_per_hit: r.credits_override.trim() === '' ? null : parseInt(r.credits_override, 10),
+      credits_per_hit: parseCreditsInput(r.credits_override),
     }));
-    for (const i of items) {
-      if (i.credits_per_hit !== null && (Number.isNaN(i.credits_per_hit) || i.credits_per_hit < 1)) {
-        setEntMessage('Credit overrides must be positive integers or empty for catalog default.');
+    for (let i = 0; i < items.length; i += 1) {
+      const raw = entRows[i]?.credits_override ?? '';
+      if (raw.trim() !== '' && items[i].credits_per_hit === null) {
+        setEntMessage('Credit overrides must be positive numbers (decimals allowed) or empty for catalog default.');
         return;
       }
     }
@@ -783,7 +786,7 @@ export default function Admin() {
                   <td className="px-4 py-3">
                     <StatusBadge status={u.status} />
                   </td>
-                  <td className="px-4 py-3 font-mono">{u.credits}</td>
+                  <td className="px-4 py-3 font-mono">{formatCredits(u.credits)}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center">
                       {u.status === 'pending' && (
@@ -931,13 +934,15 @@ export default function Admin() {
                           className={
                             outcome === 'Success'
                               ? 'rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-300'
-                              : 'rounded-md bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-300'
+                              : outcome === 'Not found'
+                                ? 'rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-200'
+                                : 'rounded-md bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-300'
                           }
                         >
                           {outcome}
                         </span>
                       </td>
-                      <td className="px-4 py-2 font-mono">{row.credits_used}</td>
+                      <td className="px-4 py-2 font-mono">{formatCredits(row.credits_used)}</td>
                     </tr>
                   );
                 })}
@@ -1125,7 +1130,7 @@ export default function Admin() {
         <div className="space-y-4">
           <p className="text-sm text-[var(--app-muted)]">
             Call counts are loaded for the selected date range (IST). Optionally filter by user (same control as Search
-            logs). Enter a per-success amount for each API; line total = success count × amount.
+            logs). Enter a per-search amount for each API; line total = billable count × amount (includes not-found hits).
           </p>
           <div className="flex flex-wrap items-end gap-3 rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
             <div>
@@ -1208,9 +1213,9 @@ export default function Admin() {
                 <tr>
                   <th className="px-4 py-3 font-semibold">API</th>
                   <th className="px-4 py-3 font-semibold">Total calls</th>
-                  <th className="px-4 py-3 font-semibold">Success</th>
+                  <th className="px-4 py-3 font-semibold">Billable</th>
                   <th className="px-4 py-3 font-semibold">Error</th>
-                  <th className="px-4 py-3 font-semibold">Amount per success (₹)</th>
+                  <th className="px-4 py-3 font-semibold">Amount per search (₹)</th>
                   <th className="px-4 py-3 font-semibold">Line total (₹)</th>
                 </tr>
               </thead>
@@ -1226,7 +1231,7 @@ export default function Admin() {
                 ) : (
                   billingRows.map((row) => {
                     const rate = Number(billingRates[row.slug] ?? '');
-                    const lineTotal = Number.isFinite(rate) && rate >= 0 ? row.success * rate : null;
+                    const lineTotal = Number.isFinite(rate) && rate >= 0 ? row.billable * rate : null;
                     return (
                       <tr key={row.slug} className="border-t border-[var(--app-border)]">
                         <td className="px-4 py-2">
@@ -1234,7 +1239,7 @@ export default function Admin() {
                           <div className="font-mono text-xs text-[var(--app-muted)]">{row.slug}</div>
                         </td>
                         <td className="px-4 py-2 font-mono">{row.total}</td>
-                        <td className="px-4 py-2 font-mono text-emerald-600 dark:text-emerald-300">{row.success}</td>
+                        <td className="px-4 py-2 font-mono text-emerald-600 dark:text-emerald-300">{row.billable}</td>
                         <td className="px-4 py-2 font-mono text-red-600 dark:text-red-300">{row.error}</td>
                         <td className="px-4 py-2">
                           <input
@@ -1372,7 +1377,7 @@ export default function Admin() {
             <h2 className="mb-2 font-display text-lg font-bold text-[var(--app-text)]">Per-user API access & burn</h2>
             <p className="mb-4 text-sm text-[var(--app-muted)]">
               Only APIs with <strong className="text-[var(--app-text)]">Enabled</strong> can be called for that user. Empty credit
-              override uses the catalog default burn.
+              override uses the catalog default burn. Overrides may be fractional (e.g. <code className="rounded bg-[var(--app-bg)] px-1">1.5</code>).
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <div>
@@ -1427,7 +1432,7 @@ export default function Admin() {
                         <div className="font-medium text-[var(--app-text)]">{r.name}</div>
                         <div className="font-mono text-xs text-[var(--app-muted)]">{r.slug}</div>
                       </td>
-                      <td className="px-3 py-2 font-mono">{r.default_credits_burn}</td>
+                      <td className="px-3 py-2 font-mono">{formatCredits(r.default_credits_burn)}</td>
                       <td className="px-3 py-2">
                         <input
                           type="checkbox"
@@ -1442,7 +1447,8 @@ export default function Admin() {
                       <td className="px-3 py-2">
                         <input
                           type="number"
-                          min={1}
+                          min={0.0001}
+                          step="any"
                           placeholder={`default ${r.default_credits_burn}`}
                           value={r.credits_override}
                           onChange={(e) =>

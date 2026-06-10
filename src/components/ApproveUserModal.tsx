@@ -78,10 +78,11 @@ export default function ApproveUserModal({
     const items = rows.map((r) => ({
       api_slug: r.slug,
       enabled: r.enabled,
-      credits_per_hit: r.credits_override.trim() === '' ? null : parseInt(r.credits_override, 10),
+      credits_per_hit:
+        r.credits_override.trim() === '' ? null : Number(r.credits_override.trim()),
     }));
     for (const i of items) {
-      if (i.credits_per_hit !== null && (Number.isNaN(i.credits_per_hit) || i.credits_per_hit < 1)) return;
+      if (i.credits_per_hit !== null && (!Number.isFinite(i.credits_per_hit) || i.credits_per_hit <= 0)) return;
     }
     onConfirm({ credits: creditN, items });
   };
@@ -173,7 +174,8 @@ export default function ApproveUserModal({
                       <td className="px-3 py-2">
                         <input
                           type="number"
-                          min={1}
+                          min={0.0001}
+                          step="any"
                           disabled={!r.enabled}
                           placeholder={`${r.default_credits_burn}`}
                           value={r.credits_override}

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { AdminFieldValue } from './adminFieldDisplay';
 import { resultFieldLabel } from './resultFieldLabels';
 import { isNestedMetadataKey, stripNestedMetadata } from './resultMetadata';
 
@@ -128,9 +129,28 @@ function ResultAccordion({
   );
 }
 
-function DisplayValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+function DisplayValue({
+  value,
+  depth = 0,
+  fieldKey,
+}: {
+  value: unknown;
+  depth?: number;
+  fieldKey?: string;
+}) {
   if (isEmptyDisplayValue(value)) {
     return <span className="text-[var(--app-muted)]">—</span>;
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    if (typeof value === 'string') {
+      const linked = <AdminFieldValue fieldKey={fieldKey} value={value} />;
+      if (linked) return linked;
+    }
+    return (
+      <span className="whitespace-pre-wrap break-words text-sm font-medium leading-snug text-[var(--app-text)]">
+        {formatScalar(value)}
+      </span>
+    );
   }
   if (Array.isArray(value)) {
     const objectRows = value.filter(
@@ -167,7 +187,7 @@ function ScalarGrid({ entries }: { entries: [string, unknown][] }) {
             {resultFieldLabel(key)}
           </dt>
           <dd className="mt-1 min-w-0 break-words">
-            <DisplayValue value={value} depth={1} />
+            <DisplayValue fieldKey={key} value={value} depth={1} />
           </dd>
         </div>
       ))}
@@ -207,7 +227,7 @@ function ArrayOfObjectsTable({ rows }: { rows: Record<string, unknown>[] }) {
               <td className="whitespace-nowrap px-3 py-2 text-[var(--app-muted)]">{i + 1}</td>
               {keys.map((k) => (
                 <td key={k} className="min-w-[10rem] max-w-md px-3 py-2 align-top">
-                  <DisplayValue value={row[k]} depth={2} />
+                  <DisplayValue fieldKey={k} value={row[k]} depth={2} />
                 </td>
               ))}
             </tr>

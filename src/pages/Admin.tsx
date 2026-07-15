@@ -73,7 +73,12 @@ type EntitlementRow = {
   default_credits_burn: number;
   enabled_for_user: boolean;
   credits_override: string;
+  multi_vendor: boolean;
+  vendor_slug_for_user: string;
+  vendors: { vendor_slug: string; vendor_name: string; is_default: boolean }[];
 };
+
+type VendorOption = { vendor_slug: string; vendor_name: string; is_default: boolean };
 
 type AuditRow = {
   id: number;
@@ -104,7 +109,13 @@ type ApiErrorRow = {
   created_at: string;
 };
 
-type CatalogPickRow = { slug: string; name: string; allowed_search_types: string[] };
+type CatalogPickRow = {
+  slug: string;
+  name: string;
+  allowed_search_types: string[];
+  vendors?: VendorOption[];
+  multi_vendor?: boolean;
+};
 
 const SEARCH_TYPES = ['Auto', 'Aadhaar', 'PAN', 'Mobile', 'Email', 'Bank', 'Unknown'];
 
@@ -149,6 +160,7 @@ export default function Admin() {
   const [auditLoading, setAuditLoading] = useState(false);
 
   const [testSlug, setTestSlug] = useState('');
+  const [testVendor, setTestVendor] = useState('');
   const [testType, setTestType] = useState('Auto');
   const [testValue, setTestValue] = useState('');
   const [testMultiValues, setTestMultiValues] = useState<Record<string, string>>({});
@@ -157,6 +169,23 @@ export default function Admin() {
   const [testError, setTestError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<unknown>(null);
   const [catalogPicklist, setCatalogPicklist] = useState<CatalogPickRow[]>([]);
+
+  const testVendorOptions = useMemo(() => {
+    const row = catalogPicklist.find((c) => c.slug === testSlug);
+    return row?.vendors ?? [];
+  }, [catalogPicklist, testSlug]);
+
+  useEffect(() => {
+    if (testVendorOptions.length === 0) {
+      setTestVendor('');
+      return;
+    }
+    const preferred =
+      testVendorOptions.find((v) => v.is_default)?.vendor_slug ??
+      testVendorOptions[0]?.vendor_slug ??
+      '';
+    setTestVendor(preferred);
+  }, [testSlug, testVendorOptions]);
 
   const testTypeOptions = useMemo(() => {
     const row = catalogPicklist.find((c) => c.slug === testSlug);
@@ -387,13 +416,32 @@ export default function Admin() {
       }
       const data = (await res.json()) as Record<string, unknown>[];
       setEntRows(
-        data.map((r) => ({
-          slug: String(r.slug),
-          name: String(r.name),
-          default_credits_burn: Number(r.default_credits_burn ?? 1),
-          enabled_for_user: Boolean(r.enabled_for_user),
-          credits_override: r.credits_override != null && r.credits_override !== '' ? String(r.credits_override) : '',
-        }))
+        data.map((r) => {
+          const vendors = Array.isArray(r.vendors)
+            ? (r.vendors as VendorOption[]).map((v) => ({
+                vendor_slug: String(v.vendor_slug),
+                vendor_name: String(v.vendor_name || v.vendor_slug),
+                is_default: Boolean(v.is_default),
+              }))
+            : [];
+          const defaultVendor =
+            vendors.find((v) => v.is_default)?.vendor_slug ?? vendors[0]?.vendor_slug ?? '';
+          const userVendor =
+            r.vendor_slug_for_user != null && String(r.vendor_slug_for_user).trim() !== ''
+              ? String(r.vendor_slug_for_user)
+              : defaultVendor;
+          return {
+            slug: String(r.slug),
+            name: String(r.name),
+            default_credits_burn: Number(r.default_credits_burn ?? 1),
+            enabled_for_user: Boolean(r.enabled_for_user),
+            credits_override:
+              r.credits_override != null && r.credits_override !== '' ? String(r.credits_override) : '',
+            multi_vendor: Boolean(r.multi_vendor) || vendors.length > 1,
+            vendor_slug_for_user: userVendor,
+            vendors,
+          };
+        })
       );
     } finally {
       setEntLoading(false);
@@ -431,8 +479,23 @@ export default function Admin() {
       .then((r) => r.json())
       .then(
         (data: {
-          flat?: Array<{ slug: string; name: string; allowed_search_types?: string[] }>;
-          grouped?: Record<string, { slug: string; name: string; allowed_search_types?: string[] }[]>;
+          flat?: Array<{
+            slug: string;
+            name: string;
+            allowed_search_types?: string[];
+            vendors?: VendorOption[];
+            multi_vendor?: boolean;
+          }>;
+          grouped?: Record<
+            string,
+            {
+              slug: string;
+              name: string;
+              allowed_search_types?: string[];
+              vendors?: VendorOption[];
+              multi_vendor?: boolean;
+            }[]
+          >;
         }) => {
           if (cancelled) return;
           const flat = Array.isArray(data.flat) ? data.flat : [];
@@ -454,6 +517,14 @@ export default function Admin() {
                 Array.isArray(r.allowed_search_types) && r.allowed_search_types.length
                   ? r.allowed_search_types
                   : SEARCH_TYPES,
+              vendors: Array.isArray(r.vendors)
+                ? r.vendors.map((v) => ({
+                    vendor_slug: String(v.vendor_slug),
+                    vendor_name: String(v.vendor_name || v.vendor_slug),
+                    is_default: Boolean(v.is_default),
+                  }))
+                : [],
+              multi_vendor: Boolean(r.multi_vendor),
             }));
           setCatalogPicklist(list);
           if (list.length > 0) {
@@ -509,7 +580,12 @@ export default function Admin() {
       const res = await apiFetch('/api/admin/test-digitap', {
         method: 'POST',
         token,
-        body: JSON.stringify({ type: testType, value: valueToSend, productSlug: testSlug }),
+        body: JSON.stringify({
+          type: testType,
+          value: valueToSend,
+          productSlug: testSlug,
+          ...(testVendor ? { vendorSlug: testVendor } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -641,6 +717,7 @@ export default function Admin() {
       api_slug: r.slug,
       enabled: r.enabled_for_user,
       credits_per_hit: parseCreditsInput(r.credits_override),
+      vendor_slug: r.multi_vendor && r.enabled_for_user ? r.vendor_slug_for_user || null : null,
     }));
     for (let i = 0; i < items.length; i += 1) {
       const raw = entRows[i]?.credits_override ?? '';
@@ -1422,6 +1499,7 @@ export default function Admin() {
                     <th className="px-3 py-2 font-semibold">API</th>
                     <th className="px-3 py-2 font-semibold">Default burn</th>
                     <th className="px-3 py-2 font-semibold">Enabled</th>
+                    <th className="px-3 py-2 font-semibold">Vendor</th>
                     <th className="px-3 py-2 font-semibold">Override credits</th>
                   </tr>
                 </thead>
@@ -1443,6 +1521,30 @@ export default function Admin() {
                             )
                           }
                         />
+                      </td>
+                      <td className="px-3 py-2">
+                        {r.multi_vendor && r.vendors.length > 0 ? (
+                          <select
+                            disabled={!r.enabled_for_user}
+                            value={r.vendor_slug_for_user}
+                            onChange={(e) =>
+                              setEntRows((rows) =>
+                                rows.map((x) =>
+                                  x.slug === r.slug ? { ...x, vendor_slug_for_user: e.target.value } : x
+                                )
+                              )
+                            }
+                            className="max-w-[11rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-xs text-[var(--app-text)] disabled:opacity-40"
+                          >
+                            {r.vendors.map((v) => (
+                              <option key={v.vendor_slug} value={v.vendor_slug}>
+                                {v.vendor_name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-xs text-[var(--app-muted)]">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <input
@@ -1473,8 +1575,8 @@ export default function Admin() {
       {tab === 'apitest' && (
         <div className="space-y-6">
           <AdminCard
-            title="Digitap probe (admin)"
-            description="Same request shaping as customer search routes, but no credits are debited and nothing is written to search_logs. Use for connectivity checks only."
+            title="API vendor probe (admin)"
+            description="Same request shaping as customer search routes. Pick product and vendor; no credits are debited and nothing is written to search_logs."
           >
             {isUiPreviewToken(token) ? (
               <p className="text-sm text-[var(--app-muted)]">Disabled in local UI preview mode.</p>
@@ -1499,6 +1601,22 @@ export default function Admin() {
                       )}
                     </select>
                   </div>
+                  {testVendorOptions.length > 0 && (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">Vendor</label>
+                      <select
+                        value={testVendor}
+                        onChange={(e) => setTestVendor(e.target.value)}
+                        className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-[var(--app-text)]"
+                      >
+                        {testVendorOptions.map((v) => (
+                          <option key={v.vendor_slug} value={v.vendor_slug}>
+                            {v.vendor_name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <div>
                     <label className="mb-1 block text-xs font-semibold uppercase text-[var(--app-muted)]">Input type</label>
                     <select

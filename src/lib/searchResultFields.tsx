@@ -213,6 +213,8 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
   const rawObj = data.rawUpstream;
   const rawPreview = data.rawUpstreamPreview;
   const digitapOnly = data.digitapResponse;
+  const vendorResponse = data.vendorResponse ?? digitapOnly;
+  const vendorSlug = typeof data.vendorSlug === 'string' ? data.vendorSlug : undefined;
   const digitapRequest =
     data.digitapRequest != null && typeof data.digitapRequest === 'object'
       ? (data.digitapRequest as Record<string, unknown>)
@@ -238,7 +240,7 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
   }, [rawObj, rawPreview]);
 
   const digitapFailureJson = useMemo(() => {
-    if (digitapOnly != null) return digitapOnly;
+    if (vendorResponse != null) return vendorResponse;
     if (parsedVendor?.digitap_response != null) return parsedVendor.digitap_response;
     if (upstreamFailed && parsedVendor) {
       const { status: _s, http_status: _h, detail: _d, transport_error: _t, digitap_response: _dr, ...rest } =
@@ -246,7 +248,7 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
       if (Object.keys(rest).length > 0) return rest;
     }
     return upstreamFailed ? parsedVendor : null;
-  }, [digitapOnly, parsedVendor, upstreamFailed]);
+  }, [vendorResponse, parsedVendor, upstreamFailed]);
 
   /** Prefer API `normalized`; merge in `result` from raw JSON if normalized was flattened; else show parsed vendor body. */
   const displayBody = useMemo((): Record<string, unknown> | null => {
@@ -291,7 +293,7 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
       {upstreamFailed ? (
         <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 space-y-4">
           <div>
-            <h3 className="text-sm font-bold text-red-400">Digitap call failed</h3>
+            <h3 className="text-sm font-bold text-red-400">Vendor call failed</h3>
             {httpStatus != null ? (
               <p className="mt-1 text-xs text-red-300/90">
                 HTTP status: <span className="font-mono">{String(httpStatus)}</span>
@@ -353,14 +355,14 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
           {digitapFailureJson != null ? (
             <div>
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-300/80">
-                Digitap response JSON
+                Vendor response JSON
               </p>
               <pre className="max-h-[360px] overflow-auto rounded-lg border border-red-500/30 bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
                 {formatJsonBlock(digitapFailureJson)}
               </pre>
             </div>
           ) : (
-            <p className="text-xs text-red-300/80">No JSON body from Digitap — see full upstream below.</p>
+            <p className="text-xs text-red-300/80">No JSON body from vendor — see full upstream below.</p>
           )}
         </div>
       ) : null}
@@ -395,7 +397,10 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
       <div className="glass-card min-w-0 p-4 sm:p-5">
         <h3 className="mb-4 font-display text-sm font-bold text-[var(--app-text)]">Result data</h3>
         {(() => {
-          const business = extractBusinessPayload(displayBody);
+          const business = extractBusinessPayload(displayBody, {
+            rawUpstream: parsedVendor,
+            vendorSlug,
+          });
           if (business) {
             return <AdminResultView data={business} />;
           }
@@ -412,7 +417,7 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
             onClick={() => setShowRequest((s) => !s)}
             className="text-xs font-semibold text-[#0668E1] hover:underline"
           >
-            {showRequest ? 'Hide' : 'Show'} outbound Digitap request
+            {showRequest ? 'Hide' : 'Show'} outbound vendor request
           </button>
           {showRequest ? (
             <pre className="mt-2 max-h-[280px] overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">

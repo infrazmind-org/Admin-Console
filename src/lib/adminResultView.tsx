@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { AdminFieldValue } from './adminFieldDisplay';
 import { resultFieldLabel } from './resultFieldLabels';
-import { isNestedMetadataKey, stripNestedMetadata } from './resultMetadata';
+import { unwrapVendorBusinessPayload, vendorEnvelopeChips } from './vendorResponseParsers';
 
 const PRIORITY_KEYS = [
   'pan',
@@ -83,7 +83,6 @@ function partitionRecord(data: Record<string, unknown>) {
   const arrays: [string, unknown[]][] = [];
 
   for (const [key, value] of Object.entries(data)) {
-    if (isNestedMetadataKey(key)) continue;
     if (isEmptyDisplayValue(value)) continue;
     if (Array.isArray(value)) arrays.push([key, value]);
     else if (typeof value === 'object' && value !== null) nested.push([key, value]);
@@ -200,7 +199,7 @@ function ArrayOfObjectsTable({ rows }: { rows: Record<string, unknown>[] }) {
     const s = new Set<string>();
     for (const r of rows) {
       Object.entries(r).forEach(([k, v]) => {
-        if (!isNestedMetadataKey(k) && !isEmptyDisplayValue(v)) s.add(k);
+        if (!isEmptyDisplayValue(v)) s.add(k);
       });
     }
     return sortKeys([...s]);
@@ -239,13 +238,42 @@ function ArrayOfObjectsTable({ rows }: { rows: Record<string, unknown>[] }) {
 }
 
 function ResultHighlight({ data }: { data: Record<string, unknown> }) {
+  const prefill = data.prefill_details;
+  const prefillRecord = prefill && typeof prefill === 'object' && !Array.isArray(prefill) ? (prefill as Record<string, unknown>) : null;
+  const personalData =
+    data.personal_data && typeof data.personal_data === 'object' && !Array.isArray(data.personal_data)
+      ? (data.personal_data as Record<string, unknown>)
+      : null;
+  const personalInfo =
+    (prefillRecord?.personal_info && typeof prefillRecord.personal_info === 'object'
+      ? (prefillRecord.personal_info as Record<string, unknown>)
+      : null) ||
+    (personalData?.personal_information && typeof personalData.personal_information === 'object'
+      ? (personalData.personal_information as Record<string, unknown>)
+      : null);
+  const panDetails =
+    data.pan_details && typeof data.pan_details === 'object' && !Array.isArray(data.pan_details)
+      ? (data.pan_details as Record<string, unknown>)
+      : null;
+  const panInner =
+    panDetails?.pan_details && typeof panDetails.pan_details === 'object'
+      ? (panDetails.pan_details as Record<string, unknown>)
+      : null;
+
   const name =
     (data.fullname as string) ||
     (data.full_name as string) ||
     (data.name as string) ||
+    (prefillRecord?.name as string) ||
+    (personalInfo?.full_name as string) ||
+    (data.owner_name as string) ||
     [data.first_name, data.last_name].filter(Boolean).join(' ').trim();
-  const pan = data.pan as string | undefined;
-  const panStatus = data.pan_status as string | undefined;
+  const pan =
+    (data.pan as string) ||
+    (data.pan_number as string) ||
+    (data.id_number as string) ||
+    (panInner?.pan_number as string);
+  const panStatus = (data.pan_status as string) || (data.status as string);
 
   if (!name && !pan) return null;
 
@@ -268,9 +296,18 @@ function ResultHighlight({ data }: { data: Record<string, unknown> }) {
 
 function ResultBody({ data, depth = 0 }: { data: Record<string, unknown>; depth?: number }) {
   const { scalars, nested, arrays } = partitionRecord(data);
-  const highlightKeys = new Set(['fullname', 'full_name', 'name', 'pan', 'pan_status']);
+  const highlightKeys = new Set(['fullname', 'full_name', 'name', 'pan', 'pan_number', 'pan_status', 'owner_name']);
   const gridScalars = scalars.filter(([k]) => !highlightKeys.has(k) || depth > 0);
-  const showHighlight = depth === 0 && (data.fullname || data.full_name || data.pan);
+  const showHighlight =
+    depth === 0 &&
+    (data.fullname ||
+      data.full_name ||
+      data.pan ||
+      data.pan_number ||
+      data.owner_name ||
+      data.prefill_details ||
+      data.pan_details ||
+      data.personal_data);
 
   return (
     <div className="space-y-4">
@@ -318,14 +355,13 @@ function ResultBody({ data, depth = 0 }: { data: Record<string, unknown>; depth?
 }
 
 function normalizePayload(data: Record<string, unknown> | unknown[]): Record<string, unknown> | unknown[] {
-  const cleaned = stripNestedMetadata(data);
-  if (Array.isArray(cleaned)) return cleaned;
-  if (cleaned && typeof cleaned === 'object') {
-    const o = cleaned as Record<string, unknown>;
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
     if ('items' in o && Array.isArray(o.items)) return o.items as unknown[];
     return o;
   }
-  return { value: cleaned };
+  return { value: data };
 }
 
 /** Rich result renderer — same UX as customer dashboard search results. */
@@ -356,57 +392,20 @@ export function AdminResultView({ data }: { data: Record<string, unknown> | unkn
   return <ResultBody data={payload} />;
 }
 
-const ENVELOPE_KEYS = new Set([
-  'status',
-  'apiSource',
-  'api_source',
-  'message',
-  'detail',
-  'result_code',
-  'http_response_code',
-  'client_ref_num',
-  'request_id',
-  'providerRef',
-  'provider_ref',
-  'transaction_id',
-  'url',
-  'expires',
-  'expires_on',
-  'creditsRemaining',
-  'credits_remaining',
-  'result',
-]);
-
 export function extractBusinessPayload(
-  body: Record<string, unknown> | null | undefined
+  body: Record<string, unknown> | null | undefined,
+  options?: {
+    rawUpstream?: Record<string, unknown> | null;
+    vendorSlug?: string | null;
+  }
 ): Record<string, unknown> | unknown[] | null {
   if (!body || typeof body !== 'object') return null;
-  const r = body.result;
-  if (r !== null && r !== undefined) {
-    if (typeof r === 'object') return r as Record<string, unknown> | unknown[];
-    return { value: r };
-  }
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(body)) {
-    if (ENVELOPE_KEYS.has(k)) continue;
-    if (v !== null && v !== undefined && v !== '') out[k] = v;
-  }
-  return Object.keys(out).length ? out : null;
+  return unwrapVendorBusinessPayload(body, options);
 }
 
 export function envelopeChips(body: Record<string, unknown>): { label: string; value: string }[] {
-  const chips: { label: string; value: string }[] = [];
-  const add = (key: string) => {
-    const v = body[key];
-    if (v !== null && v !== undefined && String(v).trim() !== '') {
-      chips.push({ label: resultFieldLabel(key), value: String(v) });
-    }
-  };
-  add('status');
-  add('result_code');
-  add('http_response_code');
-  add('message');
-  add('url');
-  add('transaction_id');
-  return chips;
+  return vendorEnvelopeChips(body).map((c) => ({
+    label: resultFieldLabel(c.label),
+    value: c.value,
+  }));
 }

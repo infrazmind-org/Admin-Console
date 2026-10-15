@@ -288,8 +288,19 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
         ? rawPreview
         : '';
 
+  const reportUrl =
+    norm && typeof norm === 'object' && typeof (norm as Record<string, unknown>).reportUrl === 'string'
+      ? String((norm as Record<string, unknown>).reportUrl)
+      : null;
+
   return (
     <div className="w-full min-w-0 max-w-full space-y-4">
+      {!upstreamFailed && reportUrl ? (
+        <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] px-4 py-3">
+          <span className="mr-3 text-xs font-semibold uppercase tracking-wide text-[var(--app-muted)]">Report</span>
+          <AdminFieldValue fieldKey="html_url" value={reportUrl} />
+        </div>
+      ) : null}
       {upstreamFailed ? (
         <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 space-y-4">
           <div>

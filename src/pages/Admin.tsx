@@ -11,6 +11,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import LoadingOverlay from '../components/LoadingOverlay';
 import ApproveUserModal, { type ApproveCatalogRow } from '../components/ApproveUserModal';
 import AddCreditsModal from '../components/AddCreditsModal';
+import RemoveCreditsModal from '../components/RemoveCreditsModal';
 import {
   apiErrorKindLabel,
   apiErrorSourceLabel,
@@ -76,6 +77,8 @@ type EntitlementRow = {
   multi_vendor: boolean;
   vendor_slug_for_user: string;
   vendors: { vendor_slug: string; vendor_name: string; is_default: boolean }[];
+  supports_report_download: boolean;
+  report_download_enabled: boolean;
 };
 
 type VendorOption = { vendor_slug: string; vendor_name: string; is_default: boolean };
@@ -138,6 +141,9 @@ export default function Admin() {
   const [creditsTarget, setCreditsTarget] = useState<UserRow | null>(null);
   const [creditsModalError, setCreditsModalError] = useState<string | null>(null);
   const [addingCreditsUserId, setAddingCreditsUserId] = useState<number | null>(null);
+  const [removeCreditsTarget, setRemoveCreditsTarget] = useState<UserRow | null>(null);
+  const [removeCreditsModalError, setRemoveCreditsModalError] = useState<string | null>(null);
+  const [removingCreditsUserId, setRemovingCreditsUserId] = useState<number | null>(null);
   const [logFilterUserId, setLogFilterUserId] = useState<number | ''>('');
   const [logsLoading, setLogsLoading] = useState(false);
   const [billingFrom, setBillingFrom] = useState(() => istYmdDaysAgo(30));
@@ -440,6 +446,8 @@ export default function Admin() {
             multi_vendor: Boolean(r.multi_vendor) || vendors.length > 1,
             vendor_slug_for_user: userVendor,
             vendors,
+            supports_report_download: Boolean(r.supports_report_download),
+            report_download_enabled: Boolean(r.report_download_enabled),
           };
         })
       );
@@ -660,11 +668,39 @@ export default function Admin() {
       }
       setCreditsTarget(null);
       await load();
+      await loadLogs();
       if (user?.id === u.id) await refreshUser();
     } catch {
       setCreditsModalError('Network error');
     } finally {
       setAddingCreditsUserId(null);
+    }
+  };
+
+  const confirmRemoveCredits = async (newBalance: number) => {
+    const u = removeCreditsTarget;
+    if (!u || !token || isUiPreviewToken(token)) return;
+    setRemoveCreditsModalError(null);
+    setRemovingCreditsUserId(u.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${u.id}/credits`, {
+        method: 'PUT',
+        token,
+        body: JSON.stringify({ credits: newBalance }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRemoveCreditsModalError(formatFastApiDetail(data));
+        return;
+      }
+      setRemoveCreditsTarget(null);
+      await load();
+      await loadLogs();
+      if (user?.id === u.id) await refreshUser();
+    } catch {
+      setRemoveCreditsModalError('Network error');
+    } finally {
+      setRemovingCreditsUserId(null);
     }
   };
 
@@ -718,6 +754,7 @@ export default function Admin() {
       enabled: r.enabled_for_user,
       credits_per_hit: parseCreditsInput(r.credits_override),
       vendor_slug: r.multi_vendor && r.enabled_for_user ? r.vendor_slug_for_user || null : null,
+      report_download_enabled: r.supports_report_download && r.enabled_for_user && r.report_download_enabled,
     }));
     for (let i = 0; i < items.length; i += 1) {
       const raw = entRows[i]?.credits_override ?? '';
@@ -747,7 +784,8 @@ export default function Admin() {
     auditLoading ||
     deletingUserId !== null ||
     approvingUserId !== null ||
-    addingCreditsUserId !== null;
+    addingCreditsUserId !== null ||
+    removingCreditsUserId !== null;
 
   return (
     <>
@@ -776,6 +814,19 @@ export default function Admin() {
         setCreditsModalError(null);
       }}
       onConfirm={(c) => void confirmAddCredits(c)}
+    />
+    <RemoveCreditsModal
+      open={removeCreditsTarget !== null}
+      email={removeCreditsTarget?.email ?? ''}
+      currentCredits={removeCreditsTarget?.credits ?? 0}
+      loading={removingCreditsUserId !== null}
+      error={removeCreditsModalError}
+      onCancel={() => {
+        if (removingCreditsUserId !== null) return;
+        setRemoveCreditsTarget(null);
+        setRemoveCreditsModalError(null);
+      }}
+      onConfirm={(c) => void confirmRemoveCredits(c)}
     />
     <ConfirmModal
       open={deleteTarget !== null}
@@ -907,6 +958,17 @@ export default function Admin() {
                             className="rounded-lg border border-[var(--app-border)] px-2 py-1 text-xs font-semibold text-[var(--app-text)] hover:border-[#0668E1]/40"
                           >
                             Add credits
+                          </button>
+                          <button
+                            type="button"
+                            disabled={u.credits <= 0}
+                            onClick={() => {
+                              setRemoveCreditsModalError(null);
+                              setRemoveCreditsTarget(u);
+                            }}
+                            className="rounded-lg border border-red-500/40 px-2 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Remove credits
                           </button>
                           <button
                             type="button"
@@ -1501,6 +1563,7 @@ export default function Admin() {
                     <th className="px-3 py-2 font-semibold">Enabled</th>
                     <th className="px-3 py-2 font-semibold">Vendor</th>
                     <th className="px-3 py-2 font-semibold">Override credits</th>
+                    <th className="px-3 py-2 font-semibold">Report download</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1560,6 +1623,26 @@ export default function Admin() {
                           }
                           className="w-28 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[var(--app-text)]"
                         />
+                      </td>
+                      <td className="px-3 py-2">
+                        {r.supports_report_download ? (
+                          <input
+                            type="checkbox"
+                            title="Allow this user to download the report document"
+                            disabled={!r.enabled_for_user}
+                            checked={r.enabled_for_user && r.report_download_enabled}
+                            onChange={(e) =>
+                              setEntRows((rows) =>
+                                rows.map((x) =>
+                                  x.slug === r.slug ? { ...x, report_download_enabled: e.target.checked } : x
+                                )
+                              )
+                            }
+                            className="disabled:opacity-40"
+                          />
+                        ) : (
+                          <span className="text-xs text-[var(--app-muted)]">—</span>
+                        )}
                       </td>
                     </tr>
                   ))}

@@ -62,6 +62,8 @@ export function formatAuditAction(action: string, payload: AuditPayload): string
     }
     case 'user.credits_add':
       return `Added ${payload.added ?? '?'} credits`;
+    case 'user.credits_remove':
+      return `Removed ${payload.removed ?? '?'} credits`;
     case 'user.delete':
       return 'Deleted user account';
     case 'user.api_entitlements':
@@ -94,6 +96,8 @@ export function formatAuditDetail(action: string, payload: AuditPayload): string
     }
     case 'user.credits_add':
       return `Added ${payload.added ?? '?'} credits (balance: ${payload.new_credits ?? '?'})`;
+    case 'user.credits_remove':
+      return `Balance: ${payload.previous_credits ?? '?'} → ${payload.new_credits ?? '?'} (removed ${payload.removed ?? '?'})`;
     case 'user.status':
       return `Status: ${payload.previous ?? '?'} → ${payload.status ?? '?'}`;
     case 'user.delete':
@@ -104,6 +108,10 @@ export function formatAuditDetail(action: string, payload: AuditPayload): string
       if (Array.isArray(enabled) && enabled.length) parts.push(`Enabled: ${enabled.join(', ')}`);
       const disabled = payload.disabled;
       if (Array.isArray(disabled) && disabled.length) parts.push(`Disabled: ${disabled.join(', ')}`);
+      const dlOn = payload.report_download_on;
+      if (Array.isArray(dlOn) && dlOn.length) parts.push(`Report download on: ${dlOn.join(', ')}`);
+      const dlOff = payload.report_download_off;
+      if (Array.isArray(dlOff) && dlOff.length) parts.push(`Report download off: ${dlOff.join(', ')}`);
       const overrides = payload.overrides as Record<string, number> | undefined;
       if (overrides && Object.keys(overrides).length) {
         parts.push(

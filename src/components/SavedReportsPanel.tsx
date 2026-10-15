@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { apiFetch, formatFastApiDetail } from '../lib/api';
 import { AdminResultView } from '../lib/adminResultView';
+import { CibilReportView, isCibilSummary } from '../lib/cibilReportView';
 
 type SavedReportRow = {
   id: number;
@@ -29,6 +30,33 @@ function formatWhen(iso: string): string {
 function formatSize(bytes: number | null): string {
   if (!bytes) return '';
   return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+}
+
+function SavedReportBody({ result }: { result: Record<string, unknown> }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const { fullReport, ...rest } = result;
+  const summary = rest.result;
+  return (
+    <div className="space-y-3">
+      {isCibilSummary(summary) ? <CibilReportView data={summary} /> : <AdminResultView data={rest} />}
+      {fullReport ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowRaw((s) => !s)}
+            className="text-xs font-semibold text-[var(--app-muted)] hover:text-[var(--app-text)]"
+          >
+            {showRaw ? 'Hide full vendor response' : 'Show full vendor response'}
+          </button>
+          {showRaw ? (
+            <pre className="mt-2 max-h-[480px] overflow-auto rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-3 font-mono text-[11px] text-[var(--app-text-secondary)]">
+              {JSON.stringify(fullReport, null, 2)}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function SavedReportsPanel({ token, userId }: { token: string; userId: number }) {
@@ -142,7 +170,7 @@ export default function SavedReportsPanel({ token, userId }: { token: string; us
                   ) : (
                     <p className="text-xs text-[var(--app-muted)]">No report file stored.</p>
                   )}
-                  <AdminResultView data={detail.result} />
+                  <SavedReportBody result={detail.result} />
                 </div>
               ) : null}
             </li>

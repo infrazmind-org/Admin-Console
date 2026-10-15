@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AdminFieldValue } from './adminFieldDisplay';
 import { AdminResultView, envelopeChips, extractBusinessPayload } from './adminResultView';
+import { CibilReportView, isCibilSummary } from './cibilReportView';
 import { resultFieldLabel } from './resultFieldLabels';
 
 export { resultFieldLabel } from './resultFieldLabels';
@@ -408,6 +409,9 @@ export function AdminDigitapTestView({ data }: { data: Record<string, unknown> }
       <div className="glass-card min-w-0 p-4 sm:p-5">
         <h3 className="mb-4 font-display text-sm font-bold text-[var(--app-text)]">Result data</h3>
         {(() => {
+          if (isCibilSummary(displayBody?.result)) {
+            return <CibilReportView data={displayBody.result as Record<string, unknown>} />;
+          }
           const business = extractBusinessPayload(displayBody, {
             rawUpstream: parsedVendor,
             vendorSlug,

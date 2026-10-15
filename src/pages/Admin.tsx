@@ -12,6 +12,7 @@ import LoadingOverlay from '../components/LoadingOverlay';
 import ApproveUserModal, { type ApproveCatalogRow } from '../components/ApproveUserModal';
 import AddCreditsModal from '../components/AddCreditsModal';
 import RemoveCreditsModal from '../components/RemoveCreditsModal';
+import SavedReportsPanel from '../components/SavedReportsPanel';
 import {
   apiErrorKindLabel,
   apiErrorSourceLabel,
@@ -1651,6 +1652,9 @@ export default function Admin() {
             </div>
           ) : apiUserId !== '' ? (
             <p className="text-sm text-[var(--app-muted)]">No catalog rows returned.</p>
+          ) : null}
+          {apiUserId !== '' && token && !isUiPreviewToken(token) ? (
+            <SavedReportsPanel token={token} userId={Number(apiUserId)} />
           ) : null}
         </div>
       )}

@@ -900,6 +900,7 @@ export default function Admin() {
           <table className="w-full min-w-[800px] text-left text-sm">
             <thead className="border-b border-[var(--app-border)] bg-[var(--app-bg-secondary)] text-[var(--app-muted)]">
               <tr>
+                <th className="px-4 py-3 font-semibold">User ID</th>
                 <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Role</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
@@ -910,6 +911,7 @@ export default function Admin() {
             <tbody>
               {sortedUsers.map((u) => (
                 <tr key={u.id} className="border-t border-[var(--app-border)] text-[var(--app-text-secondary)]">
+                  <td className="px-4 py-3 font-mono text-[var(--app-text)]">{u.id}</td>
                   <td className="px-4 py-3 font-medium text-[var(--app-text)]">{u.email}</td>
                   <td className="px-4 py-3">{u.role}</td>
                   <td className="px-4 py-3">
